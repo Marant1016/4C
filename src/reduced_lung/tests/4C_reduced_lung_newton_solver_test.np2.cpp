@@ -15,6 +15,7 @@
 #include "4C_reduced_lung_boundary_conditions.hpp"
 #include "4C_reduced_lung_helpers.hpp"
 #include "4C_reduced_lung_junctions.hpp"
+#include "4C_reduced_lung_linear_solver.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
 #include "4C_utils_function_manager.hpp"
 #include "4C_utils_function_of_time.hpp"
@@ -25,6 +26,7 @@
 #include <any>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <numbers>
 #include <unordered_map>
 #include <vector>
@@ -204,12 +206,16 @@ namespace
 
     const auto assembly_pipeline = create_default_reduced_lung_assembly_pipeline(
         airways, terminal_units, connections, bifurcations, boundary_conditions);
-
-    const NewtonSolverContext newton_solver_context{
+    auto linear_solver = std::make_shared<SparseNewtonLinearSolver>(SparseNewtonLinearSolverContext{
         .comm = MPI_COMM_WORLD,
-        .dynamics = params.dynamics,
         .linear_solver_parameters = solver_params,
         .solver_params_callback = get_solver_params,
+        .correction_map = row_map,
+    });
+
+    const NewtonSolverContext newton_solver_context{
+        .dynamics = params.dynamics,
+        .linear_solver = linear_solver,
         .assembly_pipeline = assembly_pipeline,
         .dofs = dofs,
         .locally_relevant_dofs = locally_relevant_dofs,

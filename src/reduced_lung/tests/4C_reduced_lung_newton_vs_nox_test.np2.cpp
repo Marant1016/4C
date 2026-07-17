@@ -14,6 +14,7 @@
 #include "4C_reduced_lung_boundary_conditions.hpp"
 #include "4C_reduced_lung_helpers.hpp"
 #include "4C_reduced_lung_junctions.hpp"
+#include "4C_reduced_lung_linear_solver.hpp"
 #include "4C_reduced_lung_newton_solver.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
 #include "4C_utils_function_manager.hpp"
@@ -345,11 +346,16 @@ namespace
 
     std::unique_ptr<NewtonSolver> create_newton_solver()
     {
+      auto linear_solver =
+          std::make_shared<SparseNewtonLinearSolver>(SparseNewtonLinearSolverContext{
+              .comm = MPI_COMM_WORLD,
+              .linear_solver_parameters = solver_params,
+              .solver_params_callback = solver_params_callback,
+              .correction_map = *row_map,
+          });
       const NewtonSolverContext context{
-          .comm = MPI_COMM_WORLD,
           .dynamics = params.dynamics,
-          .linear_solver_parameters = solver_params,
-          .solver_params_callback = solver_params_callback,
+          .linear_solver = linear_solver,
           .assembly_pipeline = assembly_pipeline,
           .dofs = *dofs,
           .locally_relevant_dofs = *locally_relevant_dofs,

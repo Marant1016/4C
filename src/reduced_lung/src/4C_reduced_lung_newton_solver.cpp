@@ -12,9 +12,7 @@
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_utils_sparse_algebra_manipulation.hpp"
 #include "4C_linalg_vector.hpp"
-#include "4C_linear_solver_method_linalg.hpp"
 #include "4C_utils_exceptions.hpp"
-#include "4C_utils_shared_ptr_from_ref.hpp"
 
 FOUR_C_NAMESPACE_OPEN
 
@@ -27,7 +25,6 @@ namespace ReducedLung
         jacobian_(context.jacobian),
         assembly_pipeline_(context.assembly_pipeline),
         residual_(context.x.get_map(), true),
-        rhs_(context.x.get_map(), true),
         delta_(context.x.get_map(), true),
         dt_(context.dynamics.time_increment),
         current_time_(initial_time),
@@ -35,8 +32,7 @@ namespace ReducedLung
             static_cast<unsigned int>(context.dynamics.max_nonlinear_iterations)),
         nonlinear_residual_tolerance_(context.dynamics.nonlinear_residual_tolerance),
         nonlinear_increment_tolerance_(context.dynamics.nonlinear_increment_tolerance),
-        linear_solver_(std::make_shared<Core::LinAlg::Solver>(context.linear_solver_parameters,
-            context.comm, context.solver_params_callback, Core::IO::Verbositylevel::minimal))
+        linear_solver_(context.linear_solver)
   {
     if (context.dynamics.max_nonlinear_iterations <= 0)
     {
@@ -44,9 +40,9 @@ namespace ReducedLung
           "ReducedLung::NewtonSolver requires a positive max_nonlinear_iterations, got {}.",
           context.dynamics.max_nonlinear_iterations);
     }
-    if (!linear_solver_)
+    if (linear_solver_ == nullptr)
     {
-      FOUR_C_THROW("ReducedLung::NewtonSolver requires a valid linear solver instance.");
+      FOUR_C_THROW("ReducedLung::NewtonSolver requires a valid Newton linear solver instance.");
     }
     if (assembly_pipeline_.residual_assemblers.empty())
     {
@@ -128,29 +124,12 @@ namespace ReducedLung
 
   double NewtonSolver::solve_linear_correction(unsigned int iteration)
   {
-    rhs_.scale(-1.0, residual_);
-    delta_.put_scalar(0.0);
-
-    Core::LinAlg::SolverParams solver_params;
-    solver_params.refactor = true;
-    solver_params.reset = iteration == 0;
-    if (linear_solver_->params().isParameter("Projector"))
-    {
-      solver_params.projector =
-          linear_solver_->params().get<std::shared_ptr<Core::LinAlg::LinearSystemProjector>>(
-              "Projector");
-    }
-
-    const int linear_solver_status = linear_solver_->solve(
-        Core::Utils::shared_ptr_from_ref(jacobian_), Core::Utils::shared_ptr_from_ref(delta_),
-        Core::Utils::shared_ptr_from_ref(rhs_), solver_params);
-    if (linear_solver_status != 0)
-    {
-      FOUR_C_THROW(
-          "ReducedLung::NewtonSolver linear solve failed at time {}, Newton iteration {} "
-          "with status {}.",
-          current_time_, iteration, linear_solver_status);
-    }
+    const NewtonLinearSystemMetadata metadata{
+        .current_time = current_time_,
+        .time_step_size_dt = dt_,
+        .nonlinear_iteration = iteration,
+    };
+    linear_solver_->solve(jacobian_, residual_, x_solution_, metadata, delta_);
 
     double increment_norm = 0.0;
     delta_.norm_2(&increment_norm);
