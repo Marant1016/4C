@@ -47,12 +47,12 @@ namespace ReducedLung
   using namespace TerminalUnits;
   using namespace Airways;
 
-  NoxAssemblyPipeline create_default_nox_assembly_pipeline(AirwayContainer& airways,
-      TerminalUnitContainer& terminal_units, Junctions::ConnectionData& connections,
-      Junctions::BifurcationData& bifurcations,
+  ReducedLungAssemblyPipeline create_default_reduced_lung_assembly_pipeline(
+      AirwayContainer& airways, TerminalUnitContainer& terminal_units,
+      Junctions::ConnectionData& connections, Junctions::BifurcationData& bifurcations,
       BoundaryConditions::BoundaryConditionContainer& boundary_conditions)
   {
-    NoxAssemblyPipeline pipeline;
+    ReducedLungAssemblyPipeline pipeline;
 
     pipeline.residual_assemblers.emplace_back(
         [&airways](Core::LinAlg::Vector<double>& residual,
@@ -129,6 +129,15 @@ namespace ReducedLung
         });
 
     return pipeline;
+  }
+
+  NoxAssemblyPipeline create_default_nox_assembly_pipeline(AirwayContainer& airways,
+      TerminalUnitContainer& terminal_units, Junctions::ConnectionData& connections,
+      Junctions::BifurcationData& bifurcations,
+      BoundaryConditions::BoundaryConditionContainer& boundary_conditions)
+  {
+    return create_default_reduced_lung_assembly_pipeline(
+        airways, terminal_units, connections, bifurcations, boundary_conditions);
   }
 
   NoxSolver::NoxSolver(const NoxSolverContext& context, double initial_time)

@@ -62,12 +62,12 @@ namespace Core::Rebalance
 namespace ReducedLung
 {
   /**
-   * @brief Ordered callback registry for NOX residual/Jacobian/state assembly.
+   * @brief Ordered callback registry for reduced-lung residual/Jacobian/state assembly.
    *
-   * The pipeline decouples @ref NoxSolver from concrete reduced-lung model blocks. Additional
+   * The pipeline decouples solver workflows from concrete reduced-lung model blocks. Additional
    * model families can register callbacks without changing solver internals.
    */
-  struct NoxAssemblyPipeline
+  struct ReducedLungAssemblyPipeline
   {
     using ResidualAssembler = std::function<void(Core::LinAlg::Vector<double>& residual,
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double current_time,
@@ -85,6 +85,9 @@ namespace ReducedLung
     std::vector<StateUpdater> state_updaters;
   };
 
+  /// Compatibility alias while NOX remains the active reduced-lung nonlinear solver.
+  using NoxAssemblyPipeline = ReducedLungAssemblyPipeline;
+
   /**
    * @brief Context bundling all objects required to construct and run @ref NoxSolver.
    */
@@ -95,11 +98,11 @@ namespace ReducedLung
     const Teuchos::ParameterList& linear_solver_parameters;  ///< Linear solver configuration.
     std::function<const Teuchos::ParameterList&(int)>
         solver_params_callback;  ///< Callback for nested/ID-based solver parameters.
-    const NoxAssemblyPipeline& assembly_pipeline;         ///< Ordered model assembly callbacks.
-    Core::LinAlg::Vector<double>& dofs;                   ///< Owned dof vector.
-    Core::LinAlg::Vector<double>& locally_relevant_dofs;  ///< Ghosted dof vector.
-    Core::LinAlg::Vector<double>& x;                      ///< NOX solution vector.
-    Core::LinAlg::SparseOperator& jacobian;               ///< NOX Jacobian operator.
+    const ReducedLungAssemblyPipeline& assembly_pipeline;  ///< Ordered model assembly callbacks.
+    Core::LinAlg::Vector<double>& dofs;                    ///< Owned dof vector.
+    Core::LinAlg::Vector<double>& locally_relevant_dofs;   ///< Ghosted dof vector.
+    Core::LinAlg::Vector<double>& x;                       ///< NOX solution vector.
+    Core::LinAlg::SparseOperator& jacobian;                ///< NOX Jacobian operator.
   };
 
   /**
@@ -129,9 +132,17 @@ namespace ReducedLung
   };
 
   /**
-   * @brief Create the default reduced-lung NOX assembly pipeline.
+   * @brief Create the default reduced-lung assembly pipeline.
    *
    * Registers airway, terminal-unit, junction, and boundary-condition contributions.
+   */
+  ReducedLungAssemblyPipeline create_default_reduced_lung_assembly_pipeline(
+      Airways::AirwayContainer& airways, TerminalUnits::TerminalUnitContainer& terminal_units,
+      Junctions::ConnectionData& connections, Junctions::BifurcationData& bifurcations,
+      BoundaryConditions::BoundaryConditionContainer& boundary_conditions);
+
+  /**
+   * @brief Compatibility wrapper for existing NOX assembly-pipeline call sites.
    */
   NoxAssemblyPipeline create_default_nox_assembly_pipeline(Airways::AirwayContainer& airways,
       TerminalUnits::TerminalUnitContainer& terminal_units, Junctions::ConnectionData& connections,
@@ -187,7 +198,7 @@ namespace ReducedLung
     Core::LinAlg::Vector<double>& x_solution_;
     Core::LinAlg::Vector<double>& dofs_;
     Core::LinAlg::Vector<double>& locally_relevant_dofs_;
-    NoxAssemblyPipeline assembly_pipeline_;
+    ReducedLungAssemblyPipeline assembly_pipeline_;
 
     // Time integration parameters
     double dt_;
