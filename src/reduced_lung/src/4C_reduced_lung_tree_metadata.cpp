@@ -1,0 +1,594 @@
+// This file is part of 4C multiphysics licensed under the
+// GNU Lesser General Public License v3.0 or later.
+//
+// See the LICENSE.md file in the top-level for license information.
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+#include "4C_config.hpp"
+
+#include "4C_reduced_lung_tree_metadata.hpp"
+
+#include "4C_linalg_map.hpp"
+#include "4C_utils_exceptions.hpp"
+
+#include <algorithm>
+#include <numeric>
+#include <utility>
+
+FOUR_C_NAMESPACE_OPEN
+
+namespace ReducedLung
+{
+  namespace
+  {
+    struct ElementEquationMetadata
+    {
+      int first_local_equation_id = -1;
+      int first_global_equation_id = -1;
+      int num_equations = 0;
+    };
+
+    TreeElementKind map_element_kind(ReducedLungParameters::LungTree::ElementType type)
+    {
+      switch (type)
+      {
+        case ReducedLungParameters::LungTree::ElementType::Airway:
+          return TreeElementKind::Airway;
+        case ReducedLungParameters::LungTree::ElementType::TerminalUnit:
+          return TreeElementKind::TerminalUnit;
+      }
+      FOUR_C_THROW("Unknown reduced-lung element type while building tree metadata.");
+    }
+
+    std::vector<int> consecutive_ids(int first_id, int count)
+    {
+      std::vector<int> ids(static_cast<std::size_t>(count));
+      std::iota(ids.begin(), ids.end(), first_id);
+      return ids;
+    }
+
+    std::vector<int> local_ids_for_global_ids(
+        const Core::LinAlg::Map& map, const std::vector<int>& global_ids)
+    {
+      std::vector<int> local_ids;
+      local_ids.reserve(global_ids.size());
+      for (const int global_id : global_ids)
+      {
+        local_ids.push_back(map.lid(global_id));
+      }
+      return local_ids;
+    }
+
+    void insert_element_equation_metadata(std::map<int, ElementEquationMetadata>& equation_metadata,
+        int global_element_id, int first_local_equation_id, int num_equations,
+        const Core::LinAlg::Map& row_map)
+    {
+      FOUR_C_ASSERT_ALWAYS(first_local_equation_id >= 0,
+          "Missing local state-equation id for reduced-lung element {}.", global_element_id + 1);
+      const ElementEquationMetadata metadata{
+          .first_local_equation_id = first_local_equation_id,
+          .first_global_equation_id = row_map.gid(first_local_equation_id),
+          .num_equations = num_equations,
+      };
+      const auto insert_result = equation_metadata.emplace(global_element_id, metadata);
+      FOUR_C_ASSERT_ALWAYS(insert_result.second,
+          "Duplicate reduced-lung model data for element {}.", global_element_id + 1);
+    }
+
+    std::map<int, ElementEquationMetadata> collect_element_equation_metadata(
+        const Airways::AirwayContainer& airways,
+        const TerminalUnits::TerminalUnitContainer& terminal_units,
+        const Core::LinAlg::Map& row_map)
+    {
+      std::map<int, ElementEquationMetadata> equation_metadata;
+
+      for (const auto& model : airways.models)
+      {
+        const auto& data = model.data;
+        for (std::size_t i = 0; i < data.global_element_id.size(); ++i)
+        {
+          FOUR_C_ASSERT_ALWAYS(i < data.local_row_id.size(),
+              "Missing airway local row id for element {}.", data.global_element_id[i] + 1);
+          insert_element_equation_metadata(equation_metadata, data.global_element_id[i],
+              data.local_row_id[i], data.n_state_equations, row_map);
+        }
+      }
+
+      for (const auto& model : terminal_units.models)
+      {
+        const auto& data = model.data;
+        for (std::size_t i = 0; i < data.global_element_id.size(); ++i)
+        {
+          FOUR_C_ASSERT_ALWAYS(i < data.local_row_id.size(),
+              "Missing terminal-unit local row id for element {}.", data.global_element_id[i] + 1);
+          insert_element_equation_metadata(
+              equation_metadata, data.global_element_id[i], data.local_row_id[i], 1, row_map);
+        }
+      }
+
+      return equation_metadata;
+    }
+
+    int element_index(const ReducedLungTreeMetadata& metadata, int global_element_id)
+    {
+      const auto it = metadata.element_index_by_global_id.find(global_element_id);
+      FOUR_C_ASSERT_ALWAYS(it != metadata.element_index_by_global_id.end(),
+          "Reduced-lung tree metadata references unknown element {}.", global_element_id + 1);
+      return it->second;
+    }
+
+    bool has_child(const TreeElementMetadata& parent, int child_index)
+    {
+      for (int i = 0; i < parent.child_count; ++i)
+      {
+        if (parent.child_element_indices[static_cast<std::size_t>(i)] == child_index)
+        {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    void validate_acyclic_from_element(
+        const ReducedLungTreeMetadata& metadata, int element_index, std::vector<int>& color)
+    {
+      if (color[static_cast<std::size_t>(element_index)] == 1)
+      {
+        FOUR_C_THROW("Reduced-lung tree topology contains a directed cycle.");
+      }
+      if (color[static_cast<std::size_t>(element_index)] == 2)
+      {
+        return;
+      }
+
+      color[static_cast<std::size_t>(element_index)] = 1;
+      const auto& element = metadata.elements[static_cast<std::size_t>(element_index)];
+      for (int i = 0; i < element.child_count; ++i)
+      {
+        validate_acyclic_from_element(
+            metadata, element.child_element_indices[static_cast<std::size_t>(i)], color);
+      }
+      color[static_cast<std::size_t>(element_index)] = 2;
+    }
+
+    void validate_acyclic(const ReducedLungTreeMetadata& metadata)
+    {
+      std::vector<int> color(metadata.elements.size(), 0);
+      for (std::size_t i = 0; i < metadata.elements.size(); ++i)
+      {
+        validate_acyclic_from_element(metadata, static_cast<int>(i), color);
+      }
+    }
+
+    void validate_connected_from_root(const ReducedLungTreeMetadata& metadata)
+    {
+      std::vector<int> stack{metadata.root_element_index};
+      std::vector<bool> visited(metadata.elements.size(), false);
+
+      while (!stack.empty())
+      {
+        const int current = stack.back();
+        stack.pop_back();
+        if (visited[static_cast<std::size_t>(current)])
+        {
+          continue;
+        }
+        visited[static_cast<std::size_t>(current)] = true;
+
+        const auto& element = metadata.elements[static_cast<std::size_t>(current)];
+        for (int i = 0; i < element.child_count; ++i)
+        {
+          stack.push_back(element.child_element_indices[static_cast<std::size_t>(i)]);
+        }
+      }
+
+      const bool all_visited =
+          std::all_of(visited.begin(), visited.end(), [](bool value) { return value; });
+      FOUR_C_ASSERT_ALWAYS(
+          all_visited, "Reduced-lung tree topology is not connected from the root element.");
+    }
+
+    void build_tree_relations(ReducedLungTreeMetadata& metadata)
+    {
+      std::map<int, std::vector<int>> elements_starting_at_node;
+      for (const auto& element : metadata.elements)
+      {
+        elements_starting_at_node[element.inlet_node_id].push_back(element.global_element_id);
+      }
+
+      for (std::size_t parent_index = 0; parent_index < metadata.elements.size(); ++parent_index)
+      {
+        auto& parent = metadata.elements[parent_index];
+        const auto child_it = elements_starting_at_node.find(parent.outlet_node_id);
+        if (child_it == elements_starting_at_node.end())
+        {
+          continue;
+        }
+
+        const auto& child_global_ids = child_it->second;
+        FOUR_C_ASSERT_ALWAYS(child_global_ids.size() <= 2u,
+            "Reduced-lung tree element {} has unsupported branch degree {}.",
+            parent.global_element_id + 1, child_global_ids.size());
+
+        parent.child_count = static_cast<int>(child_global_ids.size());
+        for (std::size_t child_slot = 0; child_slot < child_global_ids.size(); ++child_slot)
+        {
+          const int child_index_value = element_index(metadata, child_global_ids[child_slot]);
+          parent.child_element_indices[child_slot] = child_index_value;
+
+          auto& child = metadata.elements[static_cast<std::size_t>(child_index_value)];
+          FOUR_C_ASSERT_ALWAYS(child.parent_element_index == -1,
+              "Reduced-lung tree element {} has more than one parent element.",
+              child.global_element_id + 1);
+          child.parent_element_index = static_cast<int>(parent_index);
+        }
+      }
+
+      validate_acyclic(metadata);
+
+      std::vector<int> root_candidates;
+      for (std::size_t i = 0; i < metadata.elements.size(); ++i)
+      {
+        if (metadata.elements[i].parent_element_index == -1)
+        {
+          root_candidates.push_back(static_cast<int>(i));
+        }
+      }
+      FOUR_C_ASSERT_ALWAYS(root_candidates.size() == 1u,
+          "Expected exactly one reduced-lung tree root element, found {}.", root_candidates.size());
+
+      metadata.root_element_index = root_candidates.front();
+      metadata.root_node_id =
+          metadata.elements[static_cast<std::size_t>(metadata.root_element_index)].inlet_node_id;
+
+      for (const auto& element : metadata.elements)
+      {
+        FOUR_C_ASSERT_ALWAYS(element.kind != TreeElementKind::TerminalUnit || element.is_leaf(),
+            "Terminal-unit element {} has child elements, which is unsupported for tree metadata.",
+            element.global_element_id + 1);
+      }
+
+      validate_connected_from_root(metadata);
+    }
+
+    void build_layers(ReducedLungTreeMetadata& metadata)
+    {
+      std::vector<int> current_layer{metadata.root_element_index};
+      while (!current_layer.empty())
+      {
+        metadata.top_down_layers.push_back(current_layer);
+
+        std::vector<int> next_layer;
+        for (const int element_index_value : current_layer)
+        {
+          const auto& element = metadata.elements[static_cast<std::size_t>(element_index_value)];
+          for (int i = 0; i < element.child_count; ++i)
+          {
+            next_layer.push_back(element.child_element_indices[static_cast<std::size_t>(i)]);
+          }
+        }
+        current_layer = std::move(next_layer);
+      }
+
+      metadata.bottom_up_layers = metadata.top_down_layers;
+      std::reverse(metadata.bottom_up_layers.begin(), metadata.bottom_up_layers.end());
+    }
+
+    void add_connection_metadata(ReducedLungTreeMetadata& metadata,
+        const Junctions::ConnectionData& connections,
+        std::map<int, TreeJunctionKind>& junction_kind)
+    {
+      for (std::size_t i = 0; i < connections.size(); ++i)
+      {
+        const int parent_index = element_index(metadata, connections.global_parent_element_id[i]);
+        const int child_index = element_index(metadata, connections.global_child_element_id[i]);
+        FOUR_C_ASSERT_ALWAYS(
+            has_child(metadata.elements[static_cast<std::size_t>(parent_index)], child_index),
+            "Connection metadata for parent element {} and child element {} does not match the "
+            "directed topology.",
+            connections.global_parent_element_id[i] + 1,
+            connections.global_child_element_id[i] + 1);
+
+        TreeJunctionMetadata junction;
+        junction.kind = TreeJunctionKind::Connection;
+        junction.parent_element_index = parent_index;
+        junction.child_element_indices[0] = child_index;
+        junction.child_count = 1;
+        junction.first_local_equation_id = connections.first_local_equation_id[i];
+        junction.first_global_equation_id = connections.first_global_equation_id[i];
+        junction.num_equations = 2;
+        junction.global_dof_ids.assign(
+            connections.global_dof_ids[i].begin(), connections.global_dof_ids[i].end());
+        junction.local_dof_ids.assign(
+            connections.local_dof_ids[i].begin(), connections.local_dof_ids[i].end());
+        metadata.junctions.push_back(junction);
+
+        const auto insert_result =
+            junction_kind.emplace(parent_index, TreeJunctionKind::Connection);
+        FOUR_C_ASSERT_ALWAYS(insert_result.second,
+            "Duplicate junction metadata for parent element {}.",
+            connections.global_parent_element_id[i] + 1);
+      }
+    }
+
+    bool bifurcation_children_match(
+        const TreeElementMetadata& parent, int child_1_index, int child_2_index)
+    {
+      return parent.child_count == 2 && has_child(parent, child_1_index) &&
+             has_child(parent, child_2_index) && child_1_index != child_2_index;
+    }
+
+    void add_bifurcation_metadata(ReducedLungTreeMetadata& metadata,
+        const Junctions::BifurcationData& bifurcations,
+        std::map<int, TreeJunctionKind>& junction_kind)
+    {
+      for (std::size_t i = 0; i < bifurcations.size(); ++i)
+      {
+        const int parent_index = element_index(metadata, bifurcations.global_parent_element_id[i]);
+        const int child_1_index =
+            element_index(metadata, bifurcations.global_child_1_element_id[i]);
+        const int child_2_index =
+            element_index(metadata, bifurcations.global_child_2_element_id[i]);
+        FOUR_C_ASSERT_ALWAYS(
+            bifurcation_children_match(metadata.elements[static_cast<std::size_t>(parent_index)],
+                child_1_index, child_2_index),
+            "Bifurcation metadata for parent element {} does not match the directed topology.",
+            bifurcations.global_parent_element_id[i] + 1);
+
+        TreeJunctionMetadata junction;
+        junction.kind = TreeJunctionKind::Bifurcation;
+        junction.parent_element_index = parent_index;
+        junction.child_element_indices[0] = child_1_index;
+        junction.child_element_indices[1] = child_2_index;
+        junction.child_count = 2;
+        junction.first_local_equation_id = bifurcations.first_local_equation_id[i];
+        junction.first_global_equation_id = bifurcations.first_global_equation_id[i];
+        junction.num_equations = 3;
+        junction.global_dof_ids.assign(
+            bifurcations.global_dof_ids[i].begin(), bifurcations.global_dof_ids[i].end());
+        junction.local_dof_ids.assign(
+            bifurcations.local_dof_ids[i].begin(), bifurcations.local_dof_ids[i].end());
+        metadata.junctions.push_back(junction);
+
+        const auto insert_result =
+            junction_kind.emplace(parent_index, TreeJunctionKind::Bifurcation);
+        FOUR_C_ASSERT_ALWAYS(insert_result.second,
+            "Duplicate junction metadata for parent element {}.",
+            bifurcations.global_parent_element_id[i] + 1);
+      }
+    }
+
+    void validate_junction_coverage(const ReducedLungTreeMetadata& metadata,
+        const std::map<int, TreeJunctionKind>& junction_kind)
+    {
+      for (std::size_t i = 0; i < metadata.elements.size(); ++i)
+      {
+        const auto& element = metadata.elements[i];
+        if (element.child_count == 0)
+        {
+          continue;
+        }
+
+        const auto junction_it = junction_kind.find(static_cast<int>(i));
+        FOUR_C_ASSERT_ALWAYS(junction_it != junction_kind.end(),
+            "Missing junction metadata for parent element {}.", element.global_element_id + 1);
+
+        if (element.child_count == 1)
+        {
+          FOUR_C_ASSERT_ALWAYS(junction_it->second == TreeJunctionKind::Connection,
+              "Parent element {} has one child but is not represented by a connection.",
+              element.global_element_id + 1);
+        }
+        else if (element.child_count == 2)
+        {
+          FOUR_C_ASSERT_ALWAYS(junction_it->second == TreeJunctionKind::Bifurcation,
+              "Parent element {} has two children but is not represented by a bifurcation.",
+              element.global_element_id + 1);
+        }
+      }
+    }
+
+    void build_junction_metadata(ReducedLungTreeMetadata& metadata,
+        const Junctions::ConnectionData& connections,
+        const Junctions::BifurcationData& bifurcations)
+    {
+      std::map<int, TreeJunctionKind> junction_kind;
+      add_connection_metadata(metadata, connections, junction_kind);
+      add_bifurcation_metadata(metadata, bifurcations, junction_kind);
+      validate_junction_coverage(metadata, junction_kind);
+    }
+
+    int expected_boundary_dof_id(const TreeElementMetadata& element, TreeBoundarySide side,
+        BoundaryConditions::Type boundary_type)
+    {
+      if (boundary_type == BoundaryConditions::Type::Pressure)
+      {
+        return element.first_global_dof + (side == TreeBoundarySide::Inlet ? 0 : 1);
+      }
+
+      if (boundary_type == BoundaryConditions::Type::Flow)
+      {
+        return element.first_global_dof +
+               (side == TreeBoundarySide::Inlet ? 2 : element.num_dofs - 1);
+      }
+
+      FOUR_C_THROW("Unsupported reduced-lung boundary-condition type in tree metadata.");
+    }
+
+    TreeBoundarySide determine_boundary_side(const TreeElementMetadata& element, int node_id)
+    {
+      if (node_id == element.inlet_node_id)
+      {
+        return TreeBoundarySide::Inlet;
+      }
+      if (node_id == element.outlet_node_id)
+      {
+        return TreeBoundarySide::Outlet;
+      }
+      FOUR_C_THROW("Boundary condition node {} is not attached to element {}.", node_id + 1,
+          element.global_element_id + 1);
+    }
+
+    void build_boundary_condition_metadata(ReducedLungTreeMetadata& metadata,
+        const BoundaryConditions::BoundaryConditionContainer& boundary_conditions)
+    {
+      for (const auto& model : boundary_conditions.models)
+      {
+        const auto& data = model.data;
+        for (std::size_t i = 0; i < data.size(); ++i)
+        {
+          const int element_index_value = element_index(metadata, data.global_element_id[i]);
+          const auto& element = metadata.elements[static_cast<std::size_t>(element_index_value)];
+          const TreeBoundarySide side = determine_boundary_side(element, data.node_id[i]);
+          const int expected_dof_id = expected_boundary_dof_id(element, side, model.type);
+          FOUR_C_ASSERT_ALWAYS(data.global_dof_id[i] == expected_dof_id,
+              "Boundary condition {} constrains global dof {}, but element {} side expects dof {}.",
+              data.input_bc_id[i] + 1, data.global_dof_id[i], element.global_element_id + 1,
+              expected_dof_id);
+
+          metadata.boundary_conditions.push_back(TreeBoundaryConditionMetadata{
+              .type = model.type,
+              .side = side,
+              .node_id = data.node_id[i],
+              .element_index = element_index_value,
+              .local_equation_id = data.local_equation_id[i],
+              .global_equation_id = data.global_equation_id[i],
+              .global_dof_id = data.global_dof_id[i],
+              .local_dof_id = data.local_dof_id[i],
+          });
+        }
+      }
+    }
+
+    bool has_boundary_on_element_side(
+        const ReducedLungTreeMetadata& metadata, int element_index_value, TreeBoundarySide side)
+    {
+      return std::any_of(metadata.boundary_conditions.begin(), metadata.boundary_conditions.end(),
+          [element_index_value, side](const TreeBoundaryConditionMetadata& boundary)
+          { return boundary.element_index == element_index_value && boundary.side == side; });
+    }
+
+    void validate_boundary_closure(const ReducedLungTreeMetadata& metadata)
+    {
+      FOUR_C_ASSERT_ALWAYS(has_boundary_on_element_side(
+                               metadata, metadata.root_element_index, TreeBoundarySide::Inlet),
+          "Reduced-lung tree root inlet node {} has no boundary condition.",
+          metadata.root_node_id + 1);
+
+      for (std::size_t i = 0; i < metadata.elements.size(); ++i)
+      {
+        const auto& element = metadata.elements[i];
+        if (!element.is_leaf())
+        {
+          continue;
+        }
+
+        FOUR_C_ASSERT_ALWAYS(
+            has_boundary_on_element_side(metadata, static_cast<int>(i), TreeBoundarySide::Outlet),
+            "Reduced-lung tree leaf element {} outlet node {} has no boundary condition.",
+            element.global_element_id + 1, element.outlet_node_id + 1);
+      }
+    }
+  }  // namespace
+
+  ReducedLungTreeMetadata build_reduced_lung_tree_metadata(
+      const ReducedLungTreeMetadataContext& context)
+  {
+    ReducedLungTreeMetadata metadata;
+    const auto& topology = context.parameters.lung_tree.topology;
+
+    FOUR_C_ASSERT_ALWAYS(topology.num_elements > 0,
+        "Reduced-lung tree metadata requires at least one topology element.");
+
+    const auto equation_metadata =
+        collect_element_equation_metadata(context.airways, context.terminal_units, context.row_map);
+
+    metadata.elements.reserve(static_cast<std::size_t>(topology.num_elements));
+    for (int global_element_id = 0; global_element_id < topology.num_elements; ++global_element_id)
+    {
+      const auto topology_nodes = topology.element_nodes.at(global_element_id, "element_nodes");
+      FOUR_C_ASSERT_ALWAYS(topology_nodes.size() == 2u,
+          "Topology element_nodes entry {} must have 2 entries, got {}.", global_element_id + 1,
+          topology_nodes.size());
+      FOUR_C_ASSERT_ALWAYS(topology_nodes[0] >= 1 && topology_nodes[1] >= 1,
+          "Topology element_nodes entry {} must use 1-based node ids.", global_element_id + 1);
+      FOUR_C_ASSERT_ALWAYS(
+          topology_nodes[0] <= topology.num_nodes && topology_nodes[1] <= topology.num_nodes,
+          "Topology element_nodes entry {} references node ids outside [1, {}].",
+          global_element_id + 1, topology.num_nodes);
+      FOUR_C_ASSERT_ALWAYS(topology_nodes[0] != topology_nodes[1],
+          "Topology element_nodes entry {} uses identical in/out node ids.", global_element_id + 1);
+
+      const auto first_dof_it = context.first_global_dof_of_ele.find(global_element_id);
+      FOUR_C_ASSERT_ALWAYS(first_dof_it != context.first_global_dof_of_ele.end(),
+          "Missing first global dof id for reduced-lung element {}.", global_element_id + 1);
+      const auto dof_count_it = context.global_dof_per_ele.find(global_element_id);
+      FOUR_C_ASSERT_ALWAYS(dof_count_it != context.global_dof_per_ele.end(),
+          "Missing global dof count for reduced-lung element {}.", global_element_id + 1);
+      FOUR_C_ASSERT_ALWAYS(dof_count_it->second >= 3,
+          "Reduced-lung element {} has unsupported dof count {}.", global_element_id + 1,
+          dof_count_it->second);
+
+      const auto equation_it = equation_metadata.find(global_element_id);
+      FOUR_C_ASSERT_ALWAYS(equation_it != equation_metadata.end(),
+          "Missing model equation metadata for reduced-lung element {}.", global_element_id + 1);
+
+      const auto global_dof_ids = consecutive_ids(first_dof_it->second, dof_count_it->second);
+      TreeElementMetadata element{
+          .global_element_id = global_element_id,
+          .kind = map_element_kind(
+              context.parameters.lung_tree.element_type.at(global_element_id, "element_type")),
+          .inlet_node_id = topology_nodes[0] - 1,
+          .outlet_node_id = topology_nodes[1] - 1,
+          .parent_element_index = -1,
+          .child_element_indices = {-1, -1},
+          .child_count = 0,
+          .first_global_dof = first_dof_it->second,
+          .num_dofs = dof_count_it->second,
+          .global_dof_ids = global_dof_ids,
+          .local_dof_ids =
+              local_ids_for_global_ids(context.locally_relevant_dof_map, global_dof_ids),
+          .first_local_state_equation_id = equation_it->second.first_local_equation_id,
+          .first_global_state_equation_id = equation_it->second.first_global_equation_id,
+          .num_state_equations = equation_it->second.num_equations,
+      };
+
+      if (element.kind == TreeElementKind::Airway)
+      {
+        metadata.airway_element_indices.push_back(static_cast<int>(metadata.elements.size()));
+      }
+      else if (element.kind == TreeElementKind::TerminalUnit)
+      {
+        metadata.terminal_unit_element_indices.push_back(
+            static_cast<int>(metadata.elements.size()));
+      }
+
+      metadata.element_index_by_global_id.emplace(
+          global_element_id, static_cast<int>(metadata.elements.size()));
+      metadata.elements.push_back(std::move(element));
+    }
+
+    metadata.num_global_dofs = 0;
+    for (const auto& dof_entry : context.global_dof_per_ele)
+    {
+      metadata.num_global_dofs += dof_entry.second;
+    }
+    metadata.num_global_equations = context.row_map.num_global_elements();
+    metadata.num_locally_relevant_dofs = context.locally_relevant_dof_map.num_my_elements();
+    FOUR_C_ASSERT_ALWAYS(metadata.num_global_equations == metadata.num_global_dofs,
+        "Reduced-lung tree metadata requires a square Newton system, got {} equation rows and {} "
+        "dofs.",
+        metadata.num_global_equations, metadata.num_global_dofs);
+
+    build_tree_relations(metadata);
+    build_junction_metadata(metadata, context.connections, context.bifurcations);
+    build_boundary_condition_metadata(metadata, context.boundary_conditions);
+    validate_boundary_closure(metadata);
+    build_layers(metadata);
+
+    return metadata;
+  }
+}  // namespace ReducedLung
+
+FOUR_C_NAMESPACE_CLOSE
