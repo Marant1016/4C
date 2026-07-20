@@ -242,7 +242,7 @@ namespace ReducedLung
             std::make_unique<Core::LinAlg::Vector<double>>(*locally_relevant_dof_map_, true);
         x_ = std::make_unique<Core::LinAlg::Vector<double>>(*row_map_, true);
         sysmat_ =
-            std::make_unique<Core::LinAlg::SparseMatrix>(*row_map_, *locally_relevant_dof_map_, 3);
+            std::make_unique<Core::LinAlg::SparseMatrix>(*row_map_, *locally_relevant_dof_map_, 4);
 
         assembly_pipeline_ = create_default_reduced_lung_assembly_pipeline(
             airways_, terminal_units_, connections_, bifurcations_, boundary_conditions_);

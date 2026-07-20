@@ -1,0 +1,67 @@
+TITLE:
+  - "1 terminal unit with linear Kelvin-Voigt material and pressure bc"
+  - "NewtonSparse runtime workflow variant."
+PROBLEM TYPE:
+  PROBLEMTYPE: "Reduced_Lung"
+reduced_dimensional_lung:
+  air_properties:
+    density: 1.176e-06
+    dynamic_viscosity: 1.79105e-05
+  dynamics:
+    linear_solver: 1
+    nonlinear_solver: NewtonSparse
+    number_of_steps: 1
+    restart_every: 1
+    results_every: 1
+    time_increment: 1
+  lung_tree:
+    topology:
+      num_nodes: 2
+      num_elements: 1
+      node_coordinates:
+        from_file: "reduced_lung_terminal_unit_fields.json"
+      element_nodes:
+        from_file: "reduced_lung_terminal_unit_fields.json"
+    element_type:
+      constant: TerminalUnit
+    generation:
+      constant: -1
+    airways:
+      radius:
+        constant: 1.0
+      flow_model:
+        resistance_type:
+          constant: Linear
+        include_inertia:
+          constant: false
+      wall_model_type:
+        constant: Rigid
+    terminal_units:
+      rheological_model:
+        rheological_model_type:
+          constant: KelvinVoigt
+        kelvin_voigt:
+          viscosity_kelvin_voigt_eta:
+            constant: 0.0
+      elasticity_model:
+        elasticity_model_type:
+          constant: Linear
+        linear:
+          elasticity_e:
+            constant: 1.0
+  boundary_conditions:
+    num_conditions: 2
+    bc_type:
+      constant: Pressure
+    bc_node_id:
+      from_file: "reduced_lung_terminal_unit_fields.json"
+    boundary_value:
+      bc_function_id:
+        from_file: "reduced_lung_terminal_unit_fields.json"
+SOLVER 1:
+  SOLVER: "UMFPACK"
+  NAME: "Reduced_lung_solver"
+FUNCT1:
+  - SYMBOLIC_FUNCTION_OF_TIME: "t"
+FUNCT2:
+  - SYMBOLIC_FUNCTION_OF_TIME: "0"

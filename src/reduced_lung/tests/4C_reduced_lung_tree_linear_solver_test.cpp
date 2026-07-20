@@ -19,6 +19,7 @@
 #include "4C_reduced_lung_helpers.hpp"
 #include "4C_reduced_lung_junctions.hpp"
 #include "4C_reduced_lung_linear_solver.hpp"
+#include "4C_reduced_lung_newton_solver.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
 #include "4C_reduced_lung_tree_metadata.hpp"
 #include "4C_utils_function_manager.hpp"
@@ -27,9 +28,11 @@
 #include <mpi.h>
 #include <Teuchos_ParameterList.hpp>
 
+#include <algorithm>
 #include <any>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -41,6 +44,8 @@ namespace
 
   using ElementType = ReducedLungParameters::LungTree::ElementType;
   using BoundaryType = ReducedLungParameters::BoundaryConditions::Type;
+  using ResistanceType = ReducedLungParameters::LungTree::Airways::FlowModel::ResistanceType;
+  using WallModelType = ReducedLungParameters::LungTree::Airways::WallModelType;
   using RheologyType =
       ReducedLungParameters::LungTree::TerminalUnits::RheologicalModel::RheologicalModelType;
   using ElasticityType =
@@ -85,29 +90,60 @@ namespace
     };
   }
 
-  void set_linear_rigid_airway_model(
-      ReducedLungParameters& params, const std::unordered_map<int, double>& radii)
+  void set_airway_model(ReducedLungParameters& params, const std::unordered_map<int, double>& radii,
+      ResistanceType resistance_type, WallModelType wall_model_type)
   {
     params.lung_tree.airways.radius = Core::IO::InputField<double>(radii);
     params.lung_tree.airways.flow_model.resistance_type =
-        Core::IO::InputField<ReducedLungParameters::LungTree::Airways::FlowModel::ResistanceType>(
-            ReducedLungParameters::LungTree::Airways::FlowModel::ResistanceType::Linear);
+        Core::IO::InputField<ResistanceType>(resistance_type);
+    params.lung_tree.airways.flow_model.resistance_model.non_linear.turbulence_factor_gamma =
+        Core::IO::InputField<double>(0.6);
     params.lung_tree.airways.flow_model.include_inertia = Core::IO::InputField<bool>(false);
-    params.lung_tree.airways.wall_model_type =
-        Core::IO::InputField<ReducedLungParameters::LungTree::Airways::WallModelType>(
-            ReducedLungParameters::LungTree::Airways::WallModelType::Rigid);
+    params.lung_tree.airways.wall_model_type = Core::IO::InputField<WallModelType>(wall_model_type);
+    params.lung_tree.airways.wall_model.kelvin_voigt.elasticity.wall_poisson_ratio =
+        Core::IO::InputField<double>(0.3);
+    params.lung_tree.airways.wall_model.kelvin_voigt.elasticity.wall_elasticity =
+        Core::IO::InputField<double>(50000.0);
+    params.lung_tree.airways.wall_model.kelvin_voigt.elasticity.wall_thickness =
+        Core::IO::InputField<double>(0.001);
+    params.lung_tree.airways.wall_model.kelvin_voigt.viscosity.viscous_time_constant =
+        Core::IO::InputField<double>(0.01);
+    params.lung_tree.airways.wall_model.kelvin_voigt.viscosity.viscous_phase_shift =
+        Core::IO::InputField<double>(0.1);
+  }
+
+  void set_linear_rigid_airway_model(
+      ReducedLungParameters& params, const std::unordered_map<int, double>& radii)
+  {
+    set_airway_model(params, radii, ResistanceType::Linear, WallModelType::Rigid);
+  }
+
+  void set_terminal_unit_model(
+      ReducedLungParameters& params, RheologyType rheology_type, ElasticityType elasticity_type)
+  {
+    params.lung_tree.terminal_units.rheological_model.rheological_model_type =
+        Core::IO::InputField<RheologyType>(rheology_type);
+    params.lung_tree.terminal_units.rheological_model.kelvin_voigt.viscosity_kelvin_voigt_eta =
+        Core::IO::InputField<double>(1.0);
+    params.lung_tree.terminal_units.rheological_model.four_element_maxwell
+        .viscosity_kelvin_voigt_eta = Core::IO::InputField<double>(0.1);
+    params.lung_tree.terminal_units.rheological_model.four_element_maxwell.viscosity_maxwell_eta_m =
+        Core::IO::InputField<double>(0.5);
+    params.lung_tree.terminal_units.rheological_model.four_element_maxwell.elasticity_maxwell_e_m =
+        Core::IO::InputField<double>(1.5);
+    params.lung_tree.terminal_units.elasticity_model.elasticity_model_type =
+        Core::IO::InputField<ElasticityType>(elasticity_type);
+    params.lung_tree.terminal_units.elasticity_model.linear.elasticity_e =
+        Core::IO::InputField<double>(1.0);
+    params.lung_tree.terminal_units.elasticity_model.ogden.ogden_parameter_kappa =
+        Core::IO::InputField<double>(1.0);
+    params.lung_tree.terminal_units.elasticity_model.ogden.ogden_parameter_beta =
+        Core::IO::InputField<double>(-8.0);
   }
 
   void set_linear_terminal_unit_model(ReducedLungParameters& params)
   {
-    params.lung_tree.terminal_units.rheological_model.rheological_model_type =
-        Core::IO::InputField<RheologyType>(RheologyType::KelvinVoigt);
-    params.lung_tree.terminal_units.rheological_model.kelvin_voigt.viscosity_kelvin_voigt_eta =
-        Core::IO::InputField<double>(1.0);
-    params.lung_tree.terminal_units.elasticity_model.elasticity_model_type =
-        Core::IO::InputField<ElasticityType>(ElasticityType::Linear);
-    params.lung_tree.terminal_units.elasticity_model.linear.elasticity_e =
-        Core::IO::InputField<double>(1.0);
+    set_terminal_unit_model(params, RheologyType::KelvinVoigt, ElasticityType::Linear);
   }
 
   ReducedLungParameters make_single_terminal_unit_parameters(double dt)
@@ -221,6 +257,111 @@ namespace
     return params;
   }
 
+  ReducedLungParameters make_kelvin_voigt_airway_parameters(double dt)
+  {
+    auto params = make_serial_airway_parameters(dt);
+    set_airway_model(
+        params, {{1, 1.0}, {2, 0.9}, {3, 0.8}}, ResistanceType::Linear, WallModelType::KelvinVoigt);
+    return params;
+  }
+
+  ReducedLungParameters make_nonlinear_airway_parameters(double dt)
+  {
+    auto params = make_serial_airway_parameters(dt);
+    set_airway_model(
+        params, {{1, 1.0}, {2, 0.9}, {3, 0.8}}, ResistanceType::NonLinear, WallModelType::Rigid);
+    return params;
+  }
+
+  ReducedLungParameters make_four_element_maxwell_terminal_unit_parameters(double dt)
+  {
+    auto params = make_single_terminal_unit_parameters(dt);
+    set_terminal_unit_model(params, RheologyType::FourElementMaxwell, ElasticityType::Linear);
+    return params;
+  }
+
+  ReducedLungParameters make_mixed_airway_terminal_unit_parameters(double dt)
+  {
+    ReducedLungParameters params{};
+    set_common_air_properties(params);
+    params.dynamics = make_dynamics(dt);
+
+    params.lung_tree.topology.num_nodes = 6;
+    params.lung_tree.topology.num_elements = 5;
+    params.lung_tree.topology.node_coordinates =
+        Core::IO::InputField<std::vector<double>>(std::unordered_map<int, std::vector<double>>{
+            {1, {0.0, 0.0, 0.0}},
+            {2, {1.0, 0.0, 0.0}},
+            {3, {2.0, 1.0, 0.0}},
+            {4, {2.0, -1.0, 0.0}},
+            {5, {3.0, 1.0, 0.0}},
+            {6, {3.0, -1.0, 0.0}},
+        });
+    params.lung_tree.topology.element_nodes =
+        Core::IO::InputField<std::vector<int>>(std::unordered_map<int, std::vector<int>>{
+            {1, {1, 2}},
+            {2, {2, 3}},
+            {3, {2, 4}},
+            {4, {3, 5}},
+            {5, {4, 6}},
+        });
+    params.lung_tree.element_type =
+        Core::IO::InputField<ElementType>(std::unordered_map<int, ElementType>{
+            {1, ElementType::Airway}, {2, ElementType::Airway}, {3, ElementType::Airway},
+            {4, ElementType::TerminalUnit}, {5, ElementType::TerminalUnit}});
+    params.lung_tree.generation = Core::IO::InputField<int>(
+        std::unordered_map<int, int>{{1, 0}, {2, 1}, {3, 1}, {4, -1}, {5, -1}});
+
+    params.lung_tree.airways.radius = Core::IO::InputField<double>(
+        std::unordered_map<int, double>{{1, 1.0}, {2, 0.85}, {3, 0.7}});
+    params.lung_tree.airways.flow_model.resistance_type = Core::IO::InputField<ResistanceType>(
+        std::unordered_map<int, ResistanceType>{{1, ResistanceType::Linear},
+            {2, ResistanceType::NonLinear}, {3, ResistanceType::NonLinear}});
+    params.lung_tree.airways.flow_model.resistance_model.non_linear.turbulence_factor_gamma =
+        Core::IO::InputField<double>(0.6);
+    params.lung_tree.airways.flow_model.include_inertia = Core::IO::InputField<bool>(false);
+    params.lung_tree.airways.wall_model_type =
+        Core::IO::InputField<WallModelType>(std::unordered_map<int, WallModelType>{
+            {1, WallModelType::KelvinVoigt}, {2, WallModelType::Rigid}, {3, WallModelType::Rigid}});
+    params.lung_tree.airways.wall_model.kelvin_voigt.elasticity.wall_poisson_ratio =
+        Core::IO::InputField<double>(0.3);
+    params.lung_tree.airways.wall_model.kelvin_voigt.elasticity.wall_elasticity =
+        Core::IO::InputField<double>(50000.0);
+    params.lung_tree.airways.wall_model.kelvin_voigt.elasticity.wall_thickness =
+        Core::IO::InputField<double>(0.001);
+    params.lung_tree.airways.wall_model.kelvin_voigt.viscosity.viscous_time_constant =
+        Core::IO::InputField<double>(0.01);
+    params.lung_tree.airways.wall_model.kelvin_voigt.viscosity.viscous_phase_shift =
+        Core::IO::InputField<double>(0.1);
+
+    params.lung_tree.terminal_units.rheological_model.rheological_model_type =
+        Core::IO::InputField<RheologyType>(std::unordered_map<int, RheologyType>{
+            {4, RheologyType::FourElementMaxwell}, {5, RheologyType::KelvinVoigt}});
+    params.lung_tree.terminal_units.rheological_model.kelvin_voigt.viscosity_kelvin_voigt_eta =
+        Core::IO::InputField<double>(1.0);
+    params.lung_tree.terminal_units.rheological_model.four_element_maxwell
+        .viscosity_kelvin_voigt_eta = Core::IO::InputField<double>(0.1);
+    params.lung_tree.terminal_units.rheological_model.four_element_maxwell.viscosity_maxwell_eta_m =
+        Core::IO::InputField<double>(0.5);
+    params.lung_tree.terminal_units.rheological_model.four_element_maxwell.elasticity_maxwell_e_m =
+        Core::IO::InputField<double>(1.5);
+    params.lung_tree.terminal_units.elasticity_model.elasticity_model_type =
+        Core::IO::InputField<ElasticityType>(ElasticityType::Linear);
+    params.lung_tree.terminal_units.elasticity_model.linear.elasticity_e =
+        Core::IO::InputField<double>(1.0);
+
+    params.boundary_conditions.num_conditions = 3;
+    params.boundary_conditions.bc_type = Core::IO::InputField<BoundaryType>(BoundaryType::Pressure);
+    params.boundary_conditions.node_id =
+        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 5}, {3, 6}});
+    params.boundary_conditions.value_source =
+        ReducedLungParameters::BoundaryConditions::ValueSource::bc_function_id;
+    params.boundary_conditions.function_id =
+        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 2}, {3, 2}});
+
+    return params;
+  }
+
   struct LinearSolverFixture
   {
     ReducedLungParameters params;
@@ -245,6 +386,7 @@ namespace
     std::unique_ptr<Core::LinAlg::Vector<double>> x;
     std::unique_ptr<Core::LinAlg::SparseMatrix> sysmat;
     ReducedLungAssemblyPipeline assembly_pipeline;
+    std::optional<ReducedLungTreeMetadata> tree_metadata;
     Teuchos::ParameterList solver_params;
     std::function<const Teuchos::ParameterList&(int)> solver_params_callback;
 
@@ -306,7 +448,7 @@ namespace
       locally_relevant_dofs =
           std::make_unique<Core::LinAlg::Vector<double>>(*locally_relevant_dof_map, true);
       x = std::make_unique<Core::LinAlg::Vector<double>>(*row_map, true);
-      sysmat = std::make_unique<Core::LinAlg::SparseMatrix>(*row_map, *locally_relevant_dof_map, 3);
+      sysmat = std::make_unique<Core::LinAlg::SparseMatrix>(*row_map, *locally_relevant_dof_map, 4);
 
       solver_params.set("SOLVER", Core::LinearSolver::SolverType::UMFPACK);
       solver_params.set("NAME", "Reduced_lung_solver");
@@ -363,6 +505,73 @@ namespace
           .locally_relevant_dof_map = *locally_relevant_dof_map,
       });
     }
+
+    std::unique_ptr<NoxSolver> create_nox_solver()
+    {
+      const NoxSolverContext context{
+          .comm = MPI_COMM_WORLD,
+          .dynamics = params.dynamics,
+          .linear_solver_parameters = solver_params,
+          .solver_params_callback = solver_params_callback,
+          .assembly_pipeline = assembly_pipeline,
+          .dofs = *dofs,
+          .locally_relevant_dofs = *locally_relevant_dofs,
+          .x = *x,
+          .jacobian = *sysmat,
+      };
+      return std::make_unique<NoxSolver>(context);
+    }
+
+    std::unique_ptr<NewtonSolver> create_newton_solver(
+        const std::shared_ptr<NewtonLinearSolver>& linear_solver)
+    {
+      const NewtonSolverContext context{
+          .dynamics = params.dynamics,
+          .linear_solver = linear_solver,
+          .assembly_pipeline = assembly_pipeline,
+          .dofs = *dofs,
+          .locally_relevant_dofs = *locally_relevant_dofs,
+          .x = *x,
+          .jacobian = *sysmat,
+      };
+      return std::make_unique<NewtonSolver>(context);
+    }
+
+    std::unique_ptr<NewtonSolver> create_sparse_newton_solver()
+    {
+      auto linear_solver =
+          std::make_shared<SparseNewtonLinearSolver>(SparseNewtonLinearSolverContext{
+              .comm = MPI_COMM_WORLD,
+              .linear_solver_parameters = solver_params,
+              .solver_params_callback = solver_params_callback,
+              .correction_map = *row_map,
+          });
+      return create_newton_solver(linear_solver);
+    }
+
+    std::unique_ptr<NewtonSolver> create_tree_newton_solver()
+    {
+      tree_metadata = build_tree_metadata();
+      auto linear_solver = std::make_shared<TreeNewtonLinearSolver>(
+          TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata});
+      return create_newton_solver(linear_solver);
+    }
+
+    double residual_norm(double current_time)
+    {
+      auto residual = assemble_residual(current_time);
+      double norm = 0.0;
+      residual.norm_2(&norm);
+      return norm;
+    }
+
+    void advance_end_of_timestep()
+    {
+      TerminalUnits::end_of_timestep_routine(
+          terminal_units, *locally_relevant_dofs, params.dynamics.time_increment);
+      Airways::end_of_timestep_routine(
+          airways, *locally_relevant_dofs, params.dynamics.time_increment);
+    }
   };
 
   void expect_vectors_near(const Core::LinAlg::Vector<double>& expected,
@@ -378,12 +587,45 @@ namespace
     }
   }
 
+  void seed_nonzero_initial_state(LinearSolverFixture& fixture)
+  {
+    for (const auto& airway_model : fixture.airways.models)
+    {
+      const auto& data = airway_model.data;
+      for (std::size_t i = 0; i < data.number_of_elements(); ++i)
+      {
+        fixture.x->replace_global_value(data.gid_p1[i], 1.0 + 0.1 * static_cast<double>(i));
+        fixture.x->replace_global_value(data.gid_p2[i], 0.5 + 0.05 * static_cast<double>(i));
+        fixture.x->replace_global_value(data.gid_q1[i], 80.0 + 10.0 * static_cast<double>(i));
+        if (i < data.gid_q2.size())
+        {
+          fixture.x->replace_global_value(data.gid_q2[i], 60.0 + 8.0 * static_cast<double>(i));
+        }
+      }
+    }
+
+    for (const auto& terminal_unit_model : fixture.terminal_units.models)
+    {
+      const auto& data = terminal_unit_model.data;
+      for (std::size_t i = 0; i < data.number_of_elements(); ++i)
+      {
+        fixture.x->replace_global_value(data.gid_p1[i], 0.8 + 0.1 * static_cast<double>(i));
+        fixture.x->replace_global_value(data.gid_p2[i], 0.2 + 0.05 * static_cast<double>(i));
+        fixture.x->replace_global_value(data.gid_q[i], 0.05 + 0.01 * static_cast<double>(i));
+      }
+    }
+  }
+
   void compare_tree_and_sparse_corrections(
-      const std::string& name, const ReducedLungParameters& params)
+      const std::string& name, const ReducedLungParameters& params, bool seed_nonzero_state = false)
   {
     LinearSolverFixture fixture(name, params, {"1.0 * t", "0.0"});
     const double current_time = params.dynamics.time_increment;
 
+    if (seed_nonzero_state)
+    {
+      seed_nonzero_initial_state(fixture);
+    }
     fixture.sync_state_from_x();
     auto residual = fixture.assemble_residual(current_time);
     fixture.assemble_jacobian(current_time);
@@ -415,6 +657,117 @@ namespace
     expect_vectors_near(sparse_delta, tree_delta, 1.0e-9);
   }
 
+  struct ComparisonChecks
+  {
+    bool terminal_unit_volumes = false;
+    bool connection_flow_balance = false;
+    bool bifurcation_flow_balance = false;
+  };
+
+  void expect_terminal_unit_volumes_near(
+      const LinearSolverFixture& expected, const LinearSolverFixture& actual, double tolerance)
+  {
+    ASSERT_EQ(expected.terminal_units.models.size(), actual.terminal_units.models.size());
+    for (std::size_t model_index = 0; model_index < expected.terminal_units.models.size();
+        ++model_index)
+    {
+      const auto& expected_data = expected.terminal_units.models[model_index].data;
+      const auto& actual_data = actual.terminal_units.models[model_index].data;
+      ASSERT_EQ(expected_data.volume_v.size(), actual_data.volume_v.size());
+      for (std::size_t i = 0; i < expected_data.volume_v.size(); ++i)
+      {
+        EXPECT_NEAR(expected_data.volume_v[i], actual_data.volume_v[i], tolerance)
+            << "terminal-unit model " << model_index << ", entry " << i;
+      }
+    }
+  }
+
+  void expect_connection_flow_balance(const LinearSolverFixture& fixture, double tolerance)
+  {
+    const auto dofs = fixture.locally_relevant_dofs->local_values_as_span();
+    for (std::size_t i = 0; i < fixture.connections.size(); ++i)
+    {
+      const auto& local_dof_ids = fixture.connections.local_dof_ids[i];
+      const double flow_balance = dofs[local_dof_ids[Junctions::ConnectionData::q_out_parent]] -
+                                  dofs[local_dof_ids[Junctions::ConnectionData::q_in_child]];
+      EXPECT_NEAR(flow_balance, 0.0, tolerance) << "connection " << i;
+    }
+  }
+
+  void expect_bifurcation_flow_balance(const LinearSolverFixture& fixture, double tolerance)
+  {
+    const auto dofs = fixture.locally_relevant_dofs->local_values_as_span();
+    for (std::size_t i = 0; i < fixture.bifurcations.size(); ++i)
+    {
+      const auto& local_dof_ids = fixture.bifurcations.local_dof_ids[i];
+      const double flow_balance = dofs[local_dof_ids[Junctions::BifurcationData::q_out_parent]] -
+                                  dofs[local_dof_ids[Junctions::BifurcationData::q_in_child_1]] -
+                                  dofs[local_dof_ids[Junctions::BifurcationData::q_in_child_2]];
+      EXPECT_NEAR(flow_balance, 0.0, tolerance) << "bifurcation " << i;
+    }
+  }
+
+  void compare_all_solver_workflows(const std::string& name, ReducedLungParameters params,
+      const std::vector<std::string>& function_definitions, ComparisonChecks checks)
+  {
+    LinearSolverFixture nox_fixture(name + "_nox", params, function_definitions);
+    LinearSolverFixture sparse_fixture(name + "_sparse", params, function_definitions);
+    LinearSolverFixture tree_fixture(name + "_tree", params, function_definitions);
+
+    auto nox_solver = nox_fixture.create_nox_solver();
+    auto sparse_solver = sparse_fixture.create_sparse_newton_solver();
+    auto tree_solver = tree_fixture.create_tree_newton_solver();
+
+    const double solution_tolerance = 1.0e-6;
+    const double residual_tolerance =
+        std::max(1.0e-7, 100.0 * params.dynamics.nonlinear_residual_tolerance);
+
+    for (int step = 1; step <= params.dynamics.number_of_steps; ++step)
+    {
+      const double current_time = step * params.dynamics.time_increment;
+      const unsigned int nox_iterations = nox_solver->solve(current_time);
+      const unsigned int sparse_iterations = sparse_solver->solve(current_time);
+      const unsigned int tree_iterations = tree_solver->solve(current_time);
+
+      EXPECT_LE(
+          nox_iterations, static_cast<unsigned int>(params.dynamics.max_nonlinear_iterations));
+      EXPECT_LE(
+          sparse_iterations, static_cast<unsigned int>(params.dynamics.max_nonlinear_iterations));
+      EXPECT_LE(
+          tree_iterations, static_cast<unsigned int>(params.dynamics.max_nonlinear_iterations));
+
+      expect_vectors_near(*nox_fixture.x, *sparse_fixture.x, solution_tolerance);
+      expect_vectors_near(*nox_fixture.x, *tree_fixture.x, solution_tolerance);
+      expect_vectors_near(*nox_fixture.dofs, *sparse_fixture.dofs, solution_tolerance);
+      expect_vectors_near(*nox_fixture.dofs, *tree_fixture.dofs, solution_tolerance);
+      EXPECT_LE(nox_fixture.residual_norm(current_time), residual_tolerance);
+      EXPECT_LE(sparse_fixture.residual_norm(current_time), residual_tolerance);
+      EXPECT_LE(tree_fixture.residual_norm(current_time), residual_tolerance);
+
+      if (checks.connection_flow_balance)
+      {
+        expect_connection_flow_balance(nox_fixture, solution_tolerance);
+        expect_connection_flow_balance(sparse_fixture, solution_tolerance);
+        expect_connection_flow_balance(tree_fixture, solution_tolerance);
+      }
+      if (checks.bifurcation_flow_balance)
+      {
+        expect_bifurcation_flow_balance(nox_fixture, solution_tolerance);
+        expect_bifurcation_flow_balance(sparse_fixture, solution_tolerance);
+        expect_bifurcation_flow_balance(tree_fixture, solution_tolerance);
+      }
+
+      nox_fixture.advance_end_of_timestep();
+      sparse_fixture.advance_end_of_timestep();
+      tree_fixture.advance_end_of_timestep();
+      if (checks.terminal_unit_volumes)
+      {
+        expect_terminal_unit_volumes_near(nox_fixture, sparse_fixture, solution_tolerance);
+        expect_terminal_unit_volumes_near(nox_fixture, tree_fixture, solution_tolerance);
+      }
+    }
+  }
+
   TEST(ReducedLungTreeLinearSolverTests, SingleTerminalUnitMatchesSparseSolver)
   {
     compare_tree_and_sparse_corrections(
@@ -431,5 +784,61 @@ namespace
   {
     compare_tree_and_sparse_corrections(
         "tree_linear_bifurcation_airways", make_bifurcation_parameters(0.1));
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests, KelvinVoigtAirwaysMatchSparseSolver)
+  {
+    compare_tree_and_sparse_corrections(
+        "tree_linear_kelvin_voigt_airways", make_kelvin_voigt_airway_parameters(0.1), true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests, NonlinearAirwaysMatchSparseSolver)
+  {
+    compare_tree_and_sparse_corrections(
+        "tree_linear_nonlinear_airways", make_nonlinear_airway_parameters(0.1), true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests, FourElementMaxwellTerminalUnitMatchesSparseSolver)
+  {
+    compare_tree_and_sparse_corrections("tree_linear_four_element_maxwell_terminal",
+        make_four_element_maxwell_terminal_unit_parameters(0.1), true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests, MixedAirwaysAndTerminalUnitsMatchSparseSolver)
+  {
+    compare_tree_and_sparse_corrections("tree_linear_mixed_airways_terminal_units",
+        make_mixed_airway_terminal_unit_parameters(0.1), true);
+  }
+
+  TEST(ReducedLungTreeWorkflowTests, SingleTerminalUnitMatchesNoxAndNewtonSparse)
+  {
+    auto params = make_single_terminal_unit_parameters(0.25);
+    params.dynamics.number_of_steps = 3;
+    compare_all_solver_workflows(
+        "tree_workflow_single_terminal", params, {"0.5*t", "0.0"}, {.terminal_unit_volumes = true});
+  }
+
+  TEST(ReducedLungTreeWorkflowTests, SerialRigidAirwaysMatchNoxAndNewtonSparse)
+  {
+    auto params = make_serial_airway_parameters(0.5);
+    params.dynamics.number_of_steps = 3;
+    compare_all_solver_workflows(
+        "tree_workflow_serial_airways", params, {"t", "0.0"}, {.connection_flow_balance = true});
+  }
+
+  TEST(ReducedLungTreeWorkflowTests, BifurcationRigidAirwaysMatchNoxAndNewtonSparse)
+  {
+    auto params = make_bifurcation_parameters(0.5);
+    params.dynamics.number_of_steps = 3;
+    compare_all_solver_workflows("tree_workflow_bifurcation_airways", params, {"t", "0.0"},
+        {.bifurcation_flow_balance = true});
+  }
+
+  TEST(ReducedLungTreeWorkflowTests, MixedAirwaysAndTerminalUnitsMatchNoxAndNewtonSparse)
+  {
+    auto params = make_mixed_airway_terminal_unit_parameters(0.25);
+    params.dynamics.number_of_steps = 2;
+    compare_all_solver_workflows("tree_workflow_mixed_airways_terminal_units", params,
+        {"0.5*t", "0.0"}, {.terminal_unit_volumes = true, .bifurcation_flow_balance = true});
   }
 }  // namespace
