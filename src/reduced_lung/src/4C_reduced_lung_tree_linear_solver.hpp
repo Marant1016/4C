@@ -13,6 +13,9 @@
 #include "4C_reduced_lung_linear_solver.hpp"
 #include "4C_reduced_lung_tree_metadata.hpp"
 
+#include <string>
+#include <vector>
+
 FOUR_C_NAMESPACE_OPEN
 
 namespace ReducedLung
@@ -54,10 +57,60 @@ namespace ReducedLung
         Core::LinAlg::Vector<double>& delta) override;
 
    private:
+    struct SubtreeRelation
+    {
+      double G = 0.0;
+      double h = 0.0;
+    };
+
+    struct ChildInterfacePlan
+    {
+      int child_element_index = -1;
+      int pressure_row = -1;
+      int parent_outlet_pressure_local_dof = -1;
+      int child_inlet_pressure_local_dof = -1;
+      int child_inlet_flow_local_dof = -1;
+      int parent_outlet_pressure_unknown_index = -1;
+    };
+
+    struct ElementSolvePlan
+    {
+      int element_index = -1;
+      int global_element_id = -1;
+      int inlet_pressure_local_dof = -1;
+      int inlet_flow_unknown_index = -1;
+      bool is_leaf = false;
+      std::vector<int> unknown_global_dof_ids;
+      std::vector<int> unknown_local_dof_ids;
+      std::vector<int> equation_rows;
+      std::vector<ChildInterfacePlan> child_interfaces;
+      std::string context;
+    };
+
+    struct ElementWorkspace
+    {
+      std::vector<std::vector<double>> matrix;
+      std::vector<double> rhs_constant;
+      std::vector<double> rhs_inlet_pressure;
+      std::vector<double> intercept;
+      std::vector<double> slope;
+      std::vector<double> child_pressure_slope;
+      std::vector<double> child_pressure_intercept;
+    };
+
+    void build_symbolic_plan();
+
     const ReducedLungTreeMetadata& tree_metadata_;
     double pivot_tolerance_;
     TreeNewtonLinearSolverCoefficientSource coefficient_source_;
     const TreeLinearization* tree_linearization_ = nullptr;
+
+    int root_boundary_row_ = -1;
+    int root_inlet_pressure_local_dof_ = -1;
+    std::vector<ElementSolvePlan> element_plans_;
+    std::vector<ElementWorkspace> element_workspaces_;
+    std::vector<SubtreeRelation> subtree_relations_;
+    std::vector<double> inlet_pressure_by_element_;
   };
 }  // namespace ReducedLung
 

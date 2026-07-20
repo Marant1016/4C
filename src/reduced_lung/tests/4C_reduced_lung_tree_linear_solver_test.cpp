@@ -602,19 +602,23 @@ namespace
     }
   }
 
-  void seed_nonzero_initial_state(LinearSolverFixture& fixture)
+  void seed_nonzero_initial_state(LinearSolverFixture& fixture, double scale = 1.0)
   {
     for (const auto& airway_model : fixture.airways.models)
     {
       const auto& data = airway_model.data;
       for (std::size_t i = 0; i < data.number_of_elements(); ++i)
       {
-        fixture.x->replace_global_value(data.gid_p1[i], 1.0 + 0.1 * static_cast<double>(i));
-        fixture.x->replace_global_value(data.gid_p2[i], 0.5 + 0.05 * static_cast<double>(i));
-        fixture.x->replace_global_value(data.gid_q1[i], 80.0 + 10.0 * static_cast<double>(i));
+        fixture.x->replace_global_value(
+            data.gid_p1[i], scale * (1.0 + 0.1 * static_cast<double>(i)));
+        fixture.x->replace_global_value(
+            data.gid_p2[i], scale * (0.5 + 0.05 * static_cast<double>(i)));
+        fixture.x->replace_global_value(
+            data.gid_q1[i], scale * (80.0 + 10.0 * static_cast<double>(i)));
         if (i < data.gid_q2.size())
         {
-          fixture.x->replace_global_value(data.gid_q2[i], 60.0 + 8.0 * static_cast<double>(i));
+          fixture.x->replace_global_value(
+              data.gid_q2[i], scale * (60.0 + 8.0 * static_cast<double>(i)));
         }
       }
     }
@@ -624,9 +628,12 @@ namespace
       const auto& data = terminal_unit_model.data;
       for (std::size_t i = 0; i < data.number_of_elements(); ++i)
       {
-        fixture.x->replace_global_value(data.gid_p1[i], 0.8 + 0.1 * static_cast<double>(i));
-        fixture.x->replace_global_value(data.gid_p2[i], 0.2 + 0.05 * static_cast<double>(i));
-        fixture.x->replace_global_value(data.gid_q[i], 0.05 + 0.01 * static_cast<double>(i));
+        fixture.x->replace_global_value(
+            data.gid_p1[i], scale * (0.8 + 0.1 * static_cast<double>(i)));
+        fixture.x->replace_global_value(
+            data.gid_p2[i], scale * (0.2 + 0.05 * static_cast<double>(i)));
+        fixture.x->replace_global_value(
+            data.gid_q[i], scale * (0.05 + 0.01 * static_cast<double>(i)));
       }
     }
   }
@@ -684,6 +691,46 @@ namespace
 
     expect_vectors_near(sparse_delta, tree_delta, 1.0e-9);
     expect_vectors_near(tree_delta, structured_tree_delta, 1.0e-9);
+  }
+
+  void compare_reused_structured_tree_solver_corrections(
+      const std::string& name, const ReducedLungParameters& params)
+  {
+    LinearSolverFixture fixture(name, params, {"0.25 + 0.5 * t", "0.0"});
+    const auto tree_metadata = fixture.build_tree_metadata();
+    TreeNewtonLinearSolver tree_solver(TreeNewtonLinearSolverContext{.tree_metadata = tree_metadata,
+        .pivot_tolerance = 1.0e-12,
+        .coefficient_source = TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks});
+    SparseNewtonLinearSolver sparse_solver(SparseNewtonLinearSolverContext{
+        .comm = MPI_COMM_WORLD,
+        .linear_solver_parameters = fixture.solver_params,
+        .solver_params_callback = fixture.solver_params_callback,
+        .correction_map = *fixture.row_map,
+    });
+
+    const std::vector<double> state_scales{0.75, 1.0, 1.25};
+    for (std::size_t step = 0; step < state_scales.size(); ++step)
+    {
+      seed_nonzero_initial_state(fixture, state_scales[step]);
+      fixture.sync_state_from_x();
+      const double current_time = params.dynamics.time_increment * static_cast<double>(step + 1);
+      auto residual = fixture.assemble_residual(current_time);
+      fixture.sysmat = std::make_unique<Core::LinAlg::SparseMatrix>(
+          *fixture.row_map, *fixture.locally_relevant_dof_map, 4);
+      fixture.assemble_jacobian(current_time);
+      auto tree_linearization = fixture.assemble_tree_linearization(current_time);
+      tree_solver.set_tree_linearization(tree_linearization);
+
+      Core::LinAlg::Vector<double> sparse_delta(*fixture.row_map, true);
+      Core::LinAlg::Vector<double> tree_delta(*fixture.row_map, true);
+      const NewtonLinearSystemMetadata metadata{.current_time = current_time,
+          .time_step_size_dt = params.dynamics.time_increment,
+          .nonlinear_iteration = static_cast<unsigned int>(step)};
+      sparse_solver.solve(*fixture.sysmat, residual, *fixture.x, metadata, sparse_delta);
+      tree_solver.solve(*fixture.sysmat, residual, *fixture.x, metadata, tree_delta);
+
+      expect_vectors_near(sparse_delta, tree_delta, 1.0e-9);
+    }
   }
 
   struct ComparisonChecks
@@ -837,6 +884,12 @@ namespace
   {
     compare_tree_and_sparse_corrections("tree_linear_mixed_airways_terminal_units",
         make_mixed_airway_terminal_unit_parameters(0.1), true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests, ReusedStructuredTreeSolverMatchesSparseSolver)
+  {
+    compare_reused_structured_tree_solver_corrections(
+        "tree_linear_reused_structured_solver", make_mixed_airway_terminal_unit_parameters(0.1));
   }
 
   TEST(ReducedLungTreeWorkflowTests, SingleTerminalUnitMatchesNoxAndNewtonSparse)
