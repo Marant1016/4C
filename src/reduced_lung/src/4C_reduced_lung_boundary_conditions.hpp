@@ -48,6 +48,8 @@ namespace Core::Utils
 
 namespace ReducedLung
 {
+  class TreeLinearization;
+
   namespace BoundaryConditions
   {
     /**
@@ -254,6 +256,12 @@ namespace ReducedLung
      */
     void refresh_total_terminal_unit_volume(BoundaryConditionContainer& boundary_conditions,
         const TerminalUnits::TerminalUnitContainer& terminal_units, MPI_Comm comm);
+
+    /**
+     * @brief Assemble boundary-condition structured tree-linearization contributions.
+     */
+    void update_tree_linearization(
+        TreeLinearization& linearization, const BoundaryConditionContainer& boundary_conditions);
   }  // namespace BoundaryConditions
 }  // namespace ReducedLung
 

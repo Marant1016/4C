@@ -12,6 +12,7 @@
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_utils_sparse_algebra_manipulation.hpp"
 #include "4C_linalg_vector.hpp"
+#include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_utils_exceptions.hpp"
 
 FOUR_C_NAMESPACE_OPEN
@@ -26,6 +27,7 @@ namespace ReducedLung
         assembly_pipeline_(context.assembly_pipeline),
         residual_(context.x.get_map(), true),
         delta_(context.x.get_map(), true),
+        tree_linearization_(context.x.local_length(), context.locally_relevant_dofs.local_length()),
         dt_(context.dynamics.time_increment),
         current_time_(initial_time),
         max_nonlinear_iterations_(
@@ -51,6 +53,13 @@ namespace ReducedLung
     if (assembly_pipeline_.jacobian_assemblers.empty())
     {
       FOUR_C_THROW("ReducedLung::NewtonSolver requires at least one Jacobian assembler callback.");
+    }
+    if (linear_solver_->linearization_type() == NewtonLinearizationType::StructuredTreeBlocks &&
+        assembly_pipeline_.tree_linearization_assemblers.empty())
+    {
+      FOUR_C_THROW(
+          "ReducedLung::NewtonSolver requires tree-linearization assemblers for structured tree "
+          "linear solves.");
     }
   }
 
@@ -80,7 +89,14 @@ namespace ReducedLung
             current_time_, max_nonlinear_iterations_, residual_norm, increment_norm);
       }
 
-      assemble_jacobian_for_current_state();
+      if (linear_solver_->linearization_type() == NewtonLinearizationType::StructuredTreeBlocks)
+      {
+        assemble_tree_linearization_for_current_state();
+      }
+      else
+      {
+        assemble_jacobian_for_current_state();
+      }
       increment_norm = solve_linear_correction(iteration);
       x_solution_.update(1.0, delta_, 1.0);
     }
@@ -120,6 +136,16 @@ namespace ReducedLung
     }
 
     if (!jacobian_.filled()) jacobian_.complete();
+  }
+
+  void NewtonSolver::assemble_tree_linearization_for_current_state()
+  {
+    tree_linearization_.reset(residual_.local_length(), locally_relevant_dofs_.local_length());
+    for (const auto& assemble_tree_linearization : assembly_pipeline_.tree_linearization_assemblers)
+    {
+      assemble_tree_linearization(tree_linearization_, locally_relevant_dofs_, current_time_, dt_);
+    }
+    linear_solver_->set_tree_linearization(tree_linearization_);
   }
 
   double NewtonSolver::solve_linear_correction(unsigned int iteration)

@@ -12,6 +12,7 @@
 #include "4C_linalg_map.hpp"
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_vector.hpp"
+#include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_utils_exceptions.hpp"
 
 #include <array>
@@ -344,6 +345,42 @@ namespace ReducedLung
             local_dof_ids[BifurcationData::q_in_child_2]};
         sysmat.insert_my_values(bifurcations.first_local_equation_id[i] + 2, vals_mass.size(),
             vals_mass.data(), local_ids_mass_balance.data());
+      }
+    }
+
+    void update_tree_linearization(TreeLinearization& linearization,
+        const ConnectionData& connections, const BifurcationData& bifurcations)
+    {
+      for (size_t i = 0; i < connections.size(); ++i)
+      {
+        const auto& local_dof_ids = connections.local_dof_ids[i];
+        const int pressure_row = connections.first_local_equation_id[i];
+        const int flow_row = pressure_row + 1;
+
+        linearization.set_value(pressure_row, local_dof_ids[ConnectionData::p_out_parent], 1.0);
+        linearization.set_value(pressure_row, local_dof_ids[ConnectionData::p_in_child], -1.0);
+        linearization.set_value(flow_row, local_dof_ids[ConnectionData::q_out_parent], 1.0);
+        linearization.set_value(flow_row, local_dof_ids[ConnectionData::q_in_child], -1.0);
+      }
+
+      for (size_t i = 0; i < bifurcations.size(); ++i)
+      {
+        const auto& local_dof_ids = bifurcations.local_dof_ids[i];
+        const int child_1_pressure_row = bifurcations.first_local_equation_id[i];
+        const int child_2_pressure_row = child_1_pressure_row + 1;
+        const int flow_row = child_1_pressure_row + 2;
+
+        linearization.set_value(
+            child_1_pressure_row, local_dof_ids[BifurcationData::p_out_parent], 1.0);
+        linearization.set_value(
+            child_1_pressure_row, local_dof_ids[BifurcationData::p_in_child_1], -1.0);
+        linearization.set_value(
+            child_2_pressure_row, local_dof_ids[BifurcationData::p_out_parent], 1.0);
+        linearization.set_value(
+            child_2_pressure_row, local_dof_ids[BifurcationData::p_in_child_2], -1.0);
+        linearization.set_value(flow_row, local_dof_ids[BifurcationData::q_out_parent], 1.0);
+        linearization.set_value(flow_row, local_dof_ids[BifurcationData::q_in_child_1], -1.0);
+        linearization.set_value(flow_row, local_dof_ids[BifurcationData::q_in_child_2], -1.0);
       }
     }
   }  // namespace Junctions

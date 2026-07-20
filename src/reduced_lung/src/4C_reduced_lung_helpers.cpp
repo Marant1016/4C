@@ -114,6 +114,33 @@ namespace ReducedLung
               jacobian, boundary_conditions, locally_relevant_dofs, current_time);
         });
 
+    pipeline.tree_linearization_assemblers.emplace_back(
+        [&airways](TreeLinearization& linearization,
+            const Core::LinAlg::Vector<double>& locally_relevant_dofs, double /*current_time*/,
+            double time_step_size_dt)
+        {
+          Airways::update_tree_linearization(
+              linearization, airways, locally_relevant_dofs, time_step_size_dt);
+        });
+    pipeline.tree_linearization_assemblers.emplace_back(
+        [&terminal_units](TreeLinearization& linearization,
+            const Core::LinAlg::Vector<double>& locally_relevant_dofs, double /*current_time*/,
+            double time_step_size_dt)
+        {
+          TerminalUnits::update_tree_linearization(
+              linearization, terminal_units, locally_relevant_dofs, time_step_size_dt);
+        });
+    pipeline.tree_linearization_assemblers.emplace_back(
+        [&connections, &bifurcations](TreeLinearization& linearization,
+            const Core::LinAlg::Vector<double>& /*locally_relevant_dofs*/, double /*current_time*/,
+            double /*time_step_size_dt*/)
+        { Junctions::update_tree_linearization(linearization, connections, bifurcations); });
+    pipeline.tree_linearization_assemblers.emplace_back(
+        [&boundary_conditions](TreeLinearization& linearization,
+            const Core::LinAlg::Vector<double>& /*locally_relevant_dofs*/, double /*current_time*/,
+            double /*time_step_size_dt*/)
+        { BoundaryConditions::update_tree_linearization(linearization, boundary_conditions); });
+
     pipeline.state_updaters.emplace_back(
         [&airways](
             const Core::LinAlg::Vector<double>& locally_relevant_dofs, double time_step_size_dt)

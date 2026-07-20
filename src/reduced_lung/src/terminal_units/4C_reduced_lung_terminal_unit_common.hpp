@@ -22,7 +22,8 @@ FOUR_C_NAMESPACE_OPEN
 namespace ReducedLung
 {
   struct RuntimeOutputCollector;
-}
+  class TreeLinearization;
+}  // namespace ReducedLung
 
 namespace ReducedLung::TerminalUnits
 {
@@ -101,6 +102,11 @@ namespace ReducedLung::TerminalUnits
   ///< Callback type for Jacobian block assembly.
   using JacobianEvaluator = std::function<void(TerminalUnitData& model_data,
       Core::LinAlg::SparseMatrix& target_matrix,
+      const Core::LinAlg::Vector<double>& locally_relevant_dof_vector, double time_step_size_dt)>;
+
+  ///< Callback type for structured tree linearization block assembly.
+  using TreeLinearizationEvaluator = std::function<void(TerminalUnitData& model_data,
+      TreeLinearization& linearization,
       const Core::LinAlg::Vector<double>& locally_relevant_dof_vector, double time_step_size_dt)>;
 
   ///< Callback type for nonlinear-iteration internal state synchronization.

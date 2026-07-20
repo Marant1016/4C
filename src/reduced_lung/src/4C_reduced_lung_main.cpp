@@ -321,7 +321,9 @@ namespace ReducedLung
             .locally_relevant_dof_map = *locally_relevant_dof_map_,
         });
         newton_linear_solver_ = std::make_shared<TreeNewtonLinearSolver>(
-            TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_});
+            TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_,
+                .coefficient_source =
+                    TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks});
         build_newton_solver();
       }
 

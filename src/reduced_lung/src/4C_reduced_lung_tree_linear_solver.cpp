@@ -11,6 +11,7 @@
 
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_vector.hpp"
+#include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_utils_exceptions.hpp"
 
 #include <mpi.h>
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -47,6 +49,68 @@ namespace ReducedLung
       int parent_outlet_pressure_local_dof = -1;
       int child_inlet_pressure_local_dof = -1;
       int child_inlet_flow_local_dof = -1;
+    };
+
+    class TreeCoefficientProvider
+    {
+     public:
+      virtual ~TreeCoefficientProvider() = default;
+
+      [[nodiscard]] virtual double value(int local_row, int local_col, double tolerance) const = 0;
+    };
+
+    class SparseTreeCoefficientProvider : public TreeCoefficientProvider
+    {
+     public:
+      explicit SparseTreeCoefficientProvider(const Core::LinAlg::SparseMatrix& jacobian)
+          : jacobian_(jacobian)
+      {
+      }
+
+      [[nodiscard]] double value(int local_row, int local_col, double tolerance) const override
+      {
+        FOUR_C_ASSERT_ALWAYS(local_row >= 0 && local_row < jacobian_.num_my_rows(),
+            "TreeNewtonLinearSolver matrix row {} is not locally available.", local_row);
+        FOUR_C_ASSERT_ALWAYS(local_col >= 0,
+            "TreeNewtonLinearSolver matrix column is not locally available for row {}.", local_row);
+
+        int n_entries = 0;
+        double* values = nullptr;
+        int* columns = nullptr;
+        jacobian_.extract_my_row_view(local_row, n_entries, values, columns);
+
+        for (int i = 0; i < n_entries; ++i)
+        {
+          if (columns[i] == local_col)
+          {
+            return values[i];
+          }
+        }
+
+        (void)tolerance;
+        return 0.0;
+      }
+
+     private:
+      const Core::LinAlg::SparseMatrix& jacobian_;
+    };
+
+    class StructuredTreeCoefficientProvider : public TreeCoefficientProvider
+    {
+     public:
+      explicit StructuredTreeCoefficientProvider(const TreeLinearization& linearization)
+          : linearization_(linearization)
+      {
+      }
+
+      [[nodiscard]] double value(int local_row, int local_col, double tolerance) const override
+      {
+        (void)tolerance;
+        return linearization_.value(local_row, local_col);
+      }
+
+     private:
+      const TreeLinearization& linearization_;
     };
 
     const TreeJunctionMetadata* find_junction_for_parent(
@@ -103,34 +167,15 @@ namespace ReducedLung
     }
 
     double matrix_value(
-        const Core::LinAlg::SparseMatrix& jacobian, int local_row, int local_col, double tolerance)
+        const TreeCoefficientProvider& coefficients, int local_row, int local_col, double tolerance)
     {
-      FOUR_C_ASSERT_ALWAYS(local_row >= 0 && local_row < jacobian.num_my_rows(),
-          "TreeNewtonLinearSolver matrix row {} is not locally available.", local_row);
-      FOUR_C_ASSERT_ALWAYS(local_col >= 0,
-          "TreeNewtonLinearSolver matrix column is not locally available for row {}.", local_row);
-
-      int n_entries = 0;
-      double* values = nullptr;
-      int* columns = nullptr;
-      jacobian.extract_my_row_view(local_row, n_entries, values, columns);
-
-      for (int i = 0; i < n_entries; ++i)
-      {
-        if (columns[i] == local_col)
-        {
-          return values[i];
-        }
-      }
-
-      (void)tolerance;
-      return 0.0;
+      return coefficients.value(local_row, local_col, tolerance);
     }
 
-    double required_matrix_value(const Core::LinAlg::SparseMatrix& jacobian, int local_row,
+    double required_matrix_value(const TreeCoefficientProvider& coefficients, int local_row,
         int local_col, double tolerance, const std::string& context)
     {
-      const double value = matrix_value(jacobian, local_row, local_col, tolerance);
+      const double value = matrix_value(coefficients, local_row, local_col, tolerance);
       FOUR_C_ASSERT_ALWAYS(std::abs(value) > tolerance,
           "TreeNewtonLinearSolver missing or near-zero matrix coefficient for {}.", context);
       return value;
@@ -238,21 +283,21 @@ namespace ReducedLung
     void add_equation_row(std::vector<std::vector<double>>& local_matrix,
         std::vector<double>& constant_rhs, std::vector<double>& inlet_pressure_rhs,
         const std::vector<int>& unknown_global_dof_ids, const TreeElementMetadata& element,
-        const Core::LinAlg::SparseMatrix& jacobian, const Core::LinAlg::Vector<double>& residual,
+        const TreeCoefficientProvider& coefficients, const Core::LinAlg::Vector<double>& residual,
         int local_row, double rhs_shift, double pivot_tolerance)
     {
       const std::size_t row = local_matrix.size();
       local_matrix.emplace_back(unknown_global_dof_ids.size(), 0.0);
       constant_rhs.push_back(rhs_value(residual, local_row) - rhs_shift);
       inlet_pressure_rhs.push_back(
-          -matrix_value(jacobian, local_row, element.local_dof_ids[0], pivot_tolerance));
+          -matrix_value(coefficients, local_row, element.local_dof_ids[0], pivot_tolerance));
 
       for (std::size_t i = 0; i < unknown_global_dof_ids.size(); ++i)
       {
         const int global_dof = unknown_global_dof_ids[i];
         const int local_dof =
             element.local_dof_ids[static_cast<std::size_t>(global_dof - element.first_global_dof)];
-        local_matrix[row][i] = matrix_value(jacobian, local_row, local_dof, pivot_tolerance);
+        local_matrix[row][i] = matrix_value(coefficients, local_row, local_dof, pivot_tolerance);
       }
     }
 
@@ -261,12 +306,12 @@ namespace ReducedLung
         const std::vector<int>& unknown_global_dof_ids, const TreeElementMetadata& element,
         const TreeJunctionMetadata& junction, const ReducedLungTreeMetadata& tree_metadata,
         const std::vector<SubtreeRelation>& subtree_relations,
-        const Core::LinAlg::SparseMatrix& jacobian, const Core::LinAlg::Vector<double>& residual,
+        const TreeCoefficientProvider& coefficients, const Core::LinAlg::Vector<double>& residual,
         double pivot_tolerance)
     {
       const int flow_row = junction.first_local_equation_id + junction.child_count;
       add_equation_row(local_matrix, constant_rhs, inlet_pressure_rhs, unknown_global_dof_ids,
-          element, jacobian, residual, flow_row, 0.0, pivot_tolerance);
+          element, coefficients, residual, flow_row, 0.0, pivot_tolerance);
 
       auto& row = local_matrix.back();
       double rhs_shift = 0.0;
@@ -276,10 +321,10 @@ namespace ReducedLung
         const auto& child_relation =
             subtree_relations[static_cast<std::size_t>(child_interface.child_element_index)];
 
-        const double pressure_parent_coeff = required_matrix_value(jacobian,
+        const double pressure_parent_coeff = required_matrix_value(coefficients,
             child_interface.pressure_row, child_interface.parent_outlet_pressure_local_dof,
             pivot_tolerance, "pressure-continuity parent pressure");
-        const double pressure_child_coeff = required_matrix_value(jacobian,
+        const double pressure_child_coeff = required_matrix_value(coefficients,
             child_interface.pressure_row, child_interface.child_inlet_pressure_local_dof,
             pivot_tolerance, "pressure-continuity child pressure");
         const double pressure_rhs = rhs_value(residual, child_interface.pressure_row);
@@ -290,9 +335,9 @@ namespace ReducedLung
         const double child_flow_intercept =
             child_relation.G * child_pressure_intercept + child_relation.h;
 
-        const double flow_child_coeff =
-            required_matrix_value(jacobian, flow_row, child_interface.child_inlet_flow_local_dof,
-                pivot_tolerance, "junction flow child-flow coefficient");
+        const double flow_child_coeff = required_matrix_value(coefficients, flow_row,
+            child_interface.child_inlet_flow_local_dof, pivot_tolerance,
+            "junction flow child-flow coefficient");
 
         const int parent_outlet_pressure_global_dof = element.global_dof_ids[1];
         const int parent_outlet_pressure_unknown_index =
@@ -306,7 +351,7 @@ namespace ReducedLung
     }
 
     void condense_element(const ReducedLungTreeMetadata& tree_metadata, int element_index,
-        const Core::LinAlg::SparseMatrix& jacobian, const Core::LinAlg::Vector<double>& residual,
+        const TreeCoefficientProvider& coefficients, const Core::LinAlg::Vector<double>& residual,
         double pivot_tolerance, std::vector<SubtreeRelation>& subtree_relations,
         std::vector<ElementRecoveryData>& recovery_data)
     {
@@ -326,8 +371,8 @@ namespace ReducedLung
       for (int row_offset = 0; row_offset < element.num_state_equations; ++row_offset)
       {
         add_equation_row(local_matrix, constant_rhs, inlet_pressure_rhs, unknown_global_dof_ids,
-            element, jacobian, residual, element.first_local_state_equation_id + row_offset, 0.0,
-            pivot_tolerance);
+            element, coefficients, residual, element.first_local_state_equation_id + row_offset,
+            0.0, pivot_tolerance);
       }
 
       if (element.is_leaf())
@@ -337,7 +382,7 @@ namespace ReducedLung
             "TreeNewtonLinearSolver requires exactly one outlet boundary for leaf element {}.",
             element.global_element_id + 1);
         add_equation_row(local_matrix, constant_rhs, inlet_pressure_rhs, unknown_global_dof_ids,
-            element, jacobian, residual, outlet_boundaries.front()->local_equation_id, 0.0,
+            element, coefficients, residual, outlet_boundaries.front()->local_equation_id, 0.0,
             pivot_tolerance);
       }
       else
@@ -348,8 +393,8 @@ namespace ReducedLung
             "TreeNewtonLinearSolver found no junction metadata for parent element {}.",
             element.global_element_id + 1);
         add_downstream_flow_equation(local_matrix, constant_rhs, inlet_pressure_rhs,
-            unknown_global_dof_ids, element, *junction, tree_metadata, subtree_relations, jacobian,
-            residual, pivot_tolerance);
+            unknown_global_dof_ids, element, *junction, tree_metadata, subtree_relations,
+            coefficients, residual, pivot_tolerance);
       }
 
       FOUR_C_ASSERT_ALWAYS(local_matrix.size() == unknown_global_dof_ids.size(),
@@ -397,7 +442,7 @@ namespace ReducedLung
 
     void recover_element_and_children(const ReducedLungTreeMetadata& tree_metadata,
         int element_index, double inlet_pressure, const ElementRecoveryData& recovery_data,
-        const Core::LinAlg::SparseMatrix& jacobian, const Core::LinAlg::Vector<double>& residual,
+        const TreeCoefficientProvider& coefficients, const Core::LinAlg::Vector<double>& residual,
         double pivot_tolerance, Core::LinAlg::Vector<double>& delta,
         std::vector<double>& inlet_pressure_by_element)
     {
@@ -425,10 +470,10 @@ namespace ReducedLung
       for (int child_slot = 0; child_slot < junction->child_count; ++child_slot)
       {
         const auto child_interface = child_interface_equation(tree_metadata, *junction, child_slot);
-        const double pressure_parent_coeff = required_matrix_value(jacobian,
+        const double pressure_parent_coeff = required_matrix_value(coefficients,
             child_interface.pressure_row, child_interface.parent_outlet_pressure_local_dof,
             pivot_tolerance, "top-down pressure-continuity parent pressure");
-        const double pressure_child_coeff = required_matrix_value(jacobian,
+        const double pressure_child_coeff = required_matrix_value(coefficients,
             child_interface.pressure_row, child_interface.child_inlet_pressure_local_dof,
             pivot_tolerance, "top-down pressure-continuity child pressure");
         const double pressure_rhs = rhs_value(residual, child_interface.pressure_row);
@@ -439,23 +484,40 @@ namespace ReducedLung
     }
 
     double solve_root_inlet_pressure(const ReducedLungTreeMetadata& tree_metadata,
-        const Core::LinAlg::SparseMatrix& jacobian, const Core::LinAlg::Vector<double>& residual,
+        const TreeCoefficientProvider& coefficients, const Core::LinAlg::Vector<double>& residual,
         double pivot_tolerance)
     {
       const auto& root_element =
           tree_metadata.elements[static_cast<std::size_t>(tree_metadata.root_element_index)];
       const auto& boundary = root_inlet_boundary(tree_metadata);
-      const double root_boundary_coeff = required_matrix_value(jacobian, boundary.local_equation_id,
-          root_element.local_dof_ids[0], pivot_tolerance, "root inlet boundary");
+      const double root_boundary_coeff =
+          required_matrix_value(coefficients, boundary.local_equation_id,
+              root_element.local_dof_ids[0], pivot_tolerance, "root inlet boundary");
       return rhs_value(residual, boundary.local_equation_id) / root_boundary_coeff;
     }
   }  // namespace
 
   TreeNewtonLinearSolver::TreeNewtonLinearSolver(const TreeNewtonLinearSolverContext& context)
-      : tree_metadata_(context.tree_metadata), pivot_tolerance_(context.pivot_tolerance)
+      : tree_metadata_(context.tree_metadata),
+        pivot_tolerance_(context.pivot_tolerance),
+        coefficient_source_(context.coefficient_source)
   {
     FOUR_C_ASSERT_ALWAYS(pivot_tolerance_ > 0.0,
         "TreeNewtonLinearSolver requires a positive pivot tolerance, got {}.", pivot_tolerance_);
+  }
+
+  NewtonLinearizationType TreeNewtonLinearSolver::linearization_type() const
+  {
+    if (coefficient_source_ == TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks)
+    {
+      return NewtonLinearizationType::StructuredTreeBlocks;
+    }
+    return NewtonLinearizationType::SparseJacobian;
+  }
+
+  void TreeNewtonLinearSolver::set_tree_linearization(const TreeLinearization& tree_linearization)
+  {
+    tree_linearization_ = &tree_linearization;
   }
 
   void TreeNewtonLinearSolver::solve(Core::LinAlg::SparseMatrix& jacobian,
@@ -469,14 +531,37 @@ namespace ReducedLung
     MPI_Comm_size(delta.get_comm(), &comm_size);
     FOUR_C_ASSERT_ALWAYS(comm_size == 1,
         "TreeNewtonLinearSolver currently supports only serial reduced-lung solves.");
-    FOUR_C_ASSERT_ALWAYS(jacobian.filled(),
-        "TreeNewtonLinearSolver requires a completed sparse Jacobian before solving.");
+    if (coefficient_source_ == TreeNewtonLinearSolverCoefficientSource::SparseJacobian)
+    {
+      FOUR_C_ASSERT_ALWAYS(jacobian.filled(),
+          "TreeNewtonLinearSolver requires a completed sparse Jacobian before solving.");
+    }
+    else
+    {
+      FOUR_C_ASSERT_ALWAYS(tree_linearization_ != nullptr,
+          "TreeNewtonLinearSolver requires a structured tree linearization before solving.");
+      FOUR_C_ASSERT_ALWAYS(tree_linearization_->num_rows() == tree_metadata_.num_global_equations,
+          "TreeNewtonLinearSolver structured linearization row count does not match metadata.");
+      FOUR_C_ASSERT_ALWAYS(
+          tree_linearization_->num_dofs() == tree_metadata_.num_locally_relevant_dofs,
+          "TreeNewtonLinearSolver structured linearization dof count does not match metadata.");
+    }
     FOUR_C_ASSERT_ALWAYS(residual.local_length() == tree_metadata_.num_global_equations,
         "TreeNewtonLinearSolver requires all residual rows to be locally available.");
     FOUR_C_ASSERT_ALWAYS(delta.local_length() == tree_metadata_.num_global_dofs,
         "TreeNewtonLinearSolver requires all correction dofs to be locally available.");
 
     delta.put_scalar(0.0);
+
+    SparseTreeCoefficientProvider sparse_coefficients(jacobian);
+    std::unique_ptr<StructuredTreeCoefficientProvider> structured_coefficients;
+    const TreeCoefficientProvider* coefficients = &sparse_coefficients;
+    if (coefficient_source_ == TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks)
+    {
+      structured_coefficients =
+          std::make_unique<StructuredTreeCoefficientProvider>(*tree_linearization_);
+      coefficients = structured_coefficients.get();
+    }
 
     std::vector<SubtreeRelation> subtree_relations(tree_metadata_.elements.size());
     std::vector<ElementRecoveryData> recovery_data(tree_metadata_.elements.size());
@@ -485,7 +570,7 @@ namespace ReducedLung
     {
       for (const int element_index : layer)
       {
-        condense_element(tree_metadata_, element_index, jacobian, residual, pivot_tolerance_,
+        condense_element(tree_metadata_, element_index, *coefficients, residual, pivot_tolerance_,
             subtree_relations, recovery_data);
       }
     }
@@ -493,7 +578,7 @@ namespace ReducedLung
     std::vector<double> inlet_pressure_by_element(
         tree_metadata_.elements.size(), std::numeric_limits<double>::quiet_NaN());
     inlet_pressure_by_element[static_cast<std::size_t>(tree_metadata_.root_element_index)] =
-        solve_root_inlet_pressure(tree_metadata_, jacobian, residual, pivot_tolerance_);
+        solve_root_inlet_pressure(tree_metadata_, *coefficients, residual, pivot_tolerance_);
 
     for (const auto& layer : tree_metadata_.top_down_layers)
     {
@@ -505,7 +590,7 @@ namespace ReducedLung
             "TreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
             tree_metadata_.elements[static_cast<std::size_t>(element_index)].global_element_id + 1);
         recover_element_and_children(tree_metadata_, element_index, inlet_pressure,
-            recovery_data[static_cast<std::size_t>(element_index)], jacobian, residual,
+            recovery_data[static_cast<std::size_t>(element_index)], *coefficients, residual,
             pivot_tolerance_, delta, inlet_pressure_by_element);
       }
     }

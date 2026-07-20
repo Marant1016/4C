@@ -17,6 +17,12 @@ FOUR_C_NAMESPACE_OPEN
 
 namespace ReducedLung
 {
+  enum class TreeNewtonLinearSolverCoefficientSource
+  {
+    SparseJacobian,
+    StructuredTreeBlocks,
+  };
+
   /**
    * @brief Context for the serial tree-based Newton correction solver.
    */
@@ -24,6 +30,8 @@ namespace ReducedLung
   {
     const ReducedLungTreeMetadata& tree_metadata;
     double pivot_tolerance = 1.0e-12;
+    TreeNewtonLinearSolverCoefficientSource coefficient_source =
+        TreeNewtonLinearSolverCoefficientSource::SparseJacobian;
   };
 
   /**
@@ -37,6 +45,10 @@ namespace ReducedLung
    public:
     explicit TreeNewtonLinearSolver(const TreeNewtonLinearSolverContext& context);
 
+    [[nodiscard]] NewtonLinearizationType linearization_type() const override;
+
+    void set_tree_linearization(const TreeLinearization& tree_linearization) override;
+
     void solve(Core::LinAlg::SparseMatrix& jacobian, const Core::LinAlg::Vector<double>& residual,
         const Core::LinAlg::Vector<double>& x, const NewtonLinearSystemMetadata& metadata,
         Core::LinAlg::Vector<double>& delta) override;
@@ -44,6 +56,8 @@ namespace ReducedLung
    private:
     const ReducedLungTreeMetadata& tree_metadata_;
     double pivot_tolerance_;
+    TreeNewtonLinearSolverCoefficientSource coefficient_source_;
+    const TreeLinearization* tree_linearization_ = nullptr;
   };
 }  // namespace ReducedLung
 

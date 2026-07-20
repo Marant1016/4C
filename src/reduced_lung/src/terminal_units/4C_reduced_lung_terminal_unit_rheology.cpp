@@ -10,6 +10,7 @@
 #include "4C_reduced_lung_terminal_unit_rheology.hpp"
 
 #include "4C_reduced_lung_helpers.hpp"
+#include "4C_reduced_lung_tree_linearization.hpp"
 
 #include <array>
 
@@ -163,6 +164,50 @@ namespace ReducedLung::TerminalUnits::Rheology
       }
     }
 
+    void evaluate_kelvin_voigt_tree_linearization(TreeLinearization& target,
+        const KelvinVoigt& kelvin_voigt_model, TerminalUnitData& data,
+        const Core::LinAlg::Vector<double>& locally_relevant_dofs,
+        const Elasticity::ElasticPressurePartialsView& elastic_pressure_partials)
+    {
+      for (size_t i = 0; i < data.number_of_elements(); i++)
+      {
+        const auto& context = data.reference_volume_context[i];
+        const double q = locally_relevant_dofs.local_values_as_span()[data.lid_q[i]];
+        const double damping = kelvin_voigt_model.viscosity_eta[i];
+        const double alpha = (-elastic_pressure_partials.dp_el_dv0[i] +
+                                 damping * q * context.inv_v0_eff * context.inv_v0_eff) *
+                             context.dv0_dp;
+        target.set_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
+        target.set_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
+        target.set_value(data.local_row_id[i], data.lid_q[i],
+            -elastic_pressure_partials.dp_el_dq[i] - damping * context.inv_v0_eff);
+      }
+    }
+
+    void evaluate_four_element_maxwell_tree_linearization(TreeLinearization& target,
+        const FourElementMaxwell& four_element_maxwell_model, TerminalUnitData& data,
+        const Core::LinAlg::Vector<double>& locally_relevant_dofs,
+        const Elasticity::ElasticPressurePartialsView& elastic_pressure_partials, double dt)
+    {
+      for (size_t i = 0; i < data.number_of_elements(); i++)
+      {
+        const auto& context = data.reference_volume_context[i];
+        const double q = locally_relevant_dofs.local_values_as_span()[data.lid_q[i]];
+        const double damping = four_element_maxwell_model.viscosity_eta[i] +
+                               four_element_maxwell_model.elasticity_E_m[i] * dt *
+                                   four_element_maxwell_model.viscosity_eta_m[i] /
+                                   (four_element_maxwell_model.elasticity_E_m[i] * dt +
+                                       four_element_maxwell_model.viscosity_eta_m[i]);
+        const double alpha = (-elastic_pressure_partials.dp_el_dv0[i] +
+                                 damping * q * context.inv_v0_eff * context.inv_v0_eff) *
+                             context.dv0_dp;
+        target.set_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
+        target.set_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
+        target.set_value(data.local_row_id[i], data.lid_q[i],
+            -elastic_pressure_partials.dp_el_dq[i] - damping * context.inv_v0_eff);
+      }
+    }
+
     void append_rheology_output(const KelvinVoigt& /*model*/, const TerminalUnitData& /*data*/,
         RuntimeOutputCollector& /*collector*/, ReducedLungParameters::OutputVerbosity /*verbosity*/)
     {
@@ -253,6 +298,45 @@ namespace ReducedLung::TerminalUnits::Rheology
               const auto elastic_pressure_partials =
                   elastic_pressure_partials_evaluator(data, locally_relevant_dofs, dt);
               evaluate_four_element_maxwell_jacobian(
+                  target, model, data, locally_relevant_dofs, elastic_pressure_partials, dt);
+            };
+          }
+          else
+          {
+            FOUR_C_THROW("Unknown terminal-unit rheological model.");
+          }
+        },
+        rheological_model);
+  }
+
+  TreeLinearizationEvaluator make_tree_linearization_evaluator(RheologicalModel& rheological_model,
+      Elasticity::ElasticPressurePartialsEvaluator elastic_pressure_partials_evaluator)
+  {
+    return std::visit(
+        [&](auto& model) -> TreeLinearizationEvaluator
+        {
+          using ModelType = std::decay_t<decltype(model)>;
+          if constexpr (std::is_same_v<ModelType, KelvinVoigt>)
+          {
+            return [&model, elastic_pressure_partials_evaluator](TerminalUnitData& data,
+                       TreeLinearization& target,
+                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+            {
+              const auto elastic_pressure_partials =
+                  elastic_pressure_partials_evaluator(data, locally_relevant_dofs, dt);
+              evaluate_kelvin_voigt_tree_linearization(
+                  target, model, data, locally_relevant_dofs, elastic_pressure_partials);
+            };
+          }
+          else if constexpr (std::is_same_v<ModelType, FourElementMaxwell>)
+          {
+            return [&model, elastic_pressure_partials_evaluator](TerminalUnitData& data,
+                       TreeLinearization& target,
+                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+            {
+              const auto elastic_pressure_partials =
+                  elastic_pressure_partials_evaluator(data, locally_relevant_dofs, dt);
+              evaluate_four_element_maxwell_tree_linearization(
                   target, model, data, locally_relevant_dofs, elastic_pressure_partials, dt);
             };
           }

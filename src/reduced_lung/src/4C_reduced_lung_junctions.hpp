@@ -31,6 +31,8 @@ namespace Core::LinAlg
 
 namespace ReducedLung
 {
+  class TreeLinearization;
+
   namespace Junctions
   {
     /**
@@ -125,6 +127,9 @@ namespace ReducedLung
 
     void update_jacobian(Core::LinAlg::SparseMatrix& sysmat, const ConnectionData& connections,
         const BifurcationData& bifurcations);
+
+    void update_tree_linearization(TreeLinearization& linearization,
+        const ConnectionData& connections, const BifurcationData& bifurcations);
   }  // namespace Junctions
 }  // namespace ReducedLung
 

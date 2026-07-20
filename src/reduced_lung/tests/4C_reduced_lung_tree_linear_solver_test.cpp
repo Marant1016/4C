@@ -21,6 +21,7 @@
 #include "4C_reduced_lung_linear_solver.hpp"
 #include "4C_reduced_lung_newton_solver.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
+#include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_reduced_lung_tree_metadata.hpp"
 #include "4C_utils_function_manager.hpp"
 #include "4C_utils_function_of_time.hpp"
@@ -490,6 +491,19 @@ namespace
       if (!sysmat->filled()) sysmat->complete();
     }
 
+    TreeLinearization assemble_tree_linearization(double current_time)
+    {
+      TreeLinearization linearization(
+          row_map->num_my_elements(), locally_relevant_dof_map->num_my_elements());
+      for (const auto& assemble_tree_linearization_callback :
+          assembly_pipeline.tree_linearization_assemblers)
+      {
+        assemble_tree_linearization_callback(
+            linearization, *locally_relevant_dofs, current_time, params.dynamics.time_increment);
+      }
+      return linearization;
+    }
+
     ReducedLungTreeMetadata build_tree_metadata() const
     {
       return build_reduced_lung_tree_metadata(ReducedLungTreeMetadataContext{
@@ -553,7 +567,8 @@ namespace
     {
       tree_metadata = build_tree_metadata();
       auto linear_solver = std::make_shared<TreeNewtonLinearSolver>(
-          TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata});
+          TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata,
+              .coefficient_source = TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks});
       return create_newton_solver(linear_solver);
     }
 
@@ -632,6 +647,7 @@ namespace
 
     Core::LinAlg::Vector<double> sparse_delta(*fixture.row_map, true);
     Core::LinAlg::Vector<double> tree_delta(*fixture.row_map, true);
+    Core::LinAlg::Vector<double> structured_tree_delta(*fixture.row_map, true);
 
     SparseNewtonLinearSolver sparse_solver(SparseNewtonLinearSolverContext{
         .comm = MPI_COMM_WORLD,
@@ -654,7 +670,20 @@ namespace
             .nonlinear_iteration = 0},
         tree_delta);
 
+    auto tree_linearization = fixture.assemble_tree_linearization(current_time);
+    TreeNewtonLinearSolver structured_tree_solver(
+        TreeNewtonLinearSolverContext{.tree_metadata = tree_metadata,
+            .pivot_tolerance = 1.0e-12,
+            .coefficient_source = TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks});
+    structured_tree_solver.set_tree_linearization(tree_linearization);
+    structured_tree_solver.solve(*fixture.sysmat, residual, *fixture.x,
+        NewtonLinearSystemMetadata{.current_time = current_time,
+            .time_step_size_dt = params.dynamics.time_increment,
+            .nonlinear_iteration = 0},
+        structured_tree_delta);
+
     expect_vectors_near(sparse_delta, tree_delta, 1.0e-9);
+    expect_vectors_near(tree_delta, structured_tree_delta, 1.0e-9);
   }
 
   struct ComparisonChecks

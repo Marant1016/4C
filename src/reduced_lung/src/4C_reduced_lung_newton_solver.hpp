@@ -12,6 +12,7 @@
 
 #include "4C_reduced_lung_helpers.hpp"
 #include "4C_reduced_lung_linear_solver.hpp"
+#include "4C_reduced_lung_tree_linearization.hpp"
 
 #include <memory>
 
@@ -79,6 +80,8 @@ namespace ReducedLung
 
     void assemble_jacobian_for_current_state();
 
+    void assemble_tree_linearization_for_current_state();
+
     double solve_linear_correction(unsigned int iteration);
 
     Core::LinAlg::Vector<double>& x_solution_;
@@ -89,6 +92,7 @@ namespace ReducedLung
 
     Core::LinAlg::Vector<double> residual_;
     Core::LinAlg::Vector<double> delta_;
+    TreeLinearization tree_linearization_;
 
     double dt_;
     double current_time_;

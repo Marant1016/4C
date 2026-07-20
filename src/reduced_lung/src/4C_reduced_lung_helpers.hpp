@@ -61,6 +61,8 @@ namespace Core::Rebalance
 
 namespace ReducedLung
 {
+  class TreeLinearization;
+
   /**
    * @brief Ordered callback registry for reduced-lung residual/Jacobian/state assembly.
    *
@@ -77,11 +79,16 @@ namespace ReducedLung
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double current_time,
         double time_step_size_dt)>;
 
+    using TreeLinearizationAssembler = std::function<void(TreeLinearization& linearization,
+        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double current_time,
+        double time_step_size_dt)>;
+
     using StateUpdater = std::function<void(
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double time_step_size_dt)>;
 
     std::vector<ResidualAssembler> residual_assemblers;
     std::vector<JacobianAssembler> jacobian_assemblers;
+    std::vector<TreeLinearizationAssembler> tree_linearization_assemblers;
     std::vector<StateUpdater> state_updaters;
   };
 

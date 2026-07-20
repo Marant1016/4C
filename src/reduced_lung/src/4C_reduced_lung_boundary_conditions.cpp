@@ -14,6 +14,7 @@
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_vector.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
+#include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_utils_exceptions.hpp"
 #include "4C_utils_function_manager.hpp"
 #include "4C_utils_function_of_time.hpp"
@@ -536,6 +537,18 @@ namespace ReducedLung
 
       boundary_conditions.total_terminal_unit_volume =
           compute_total_terminal_unit_volume(terminal_units, comm);
+    }
+
+    void update_tree_linearization(
+        TreeLinearization& linearization, const BoundaryConditionContainer& boundary_conditions)
+    {
+      for (const auto& model : boundary_conditions.models)
+      {
+        for (size_t i = 0; i < model.data.size(); ++i)
+        {
+          linearization.set_value(model.data.local_equation_id[i], model.data.local_dof_id[i], 1.0);
+        }
+      }
     }
   }  // namespace BoundaryConditions
 }  // namespace ReducedLung

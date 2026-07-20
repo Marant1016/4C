@@ -29,6 +29,8 @@ namespace Core::LinAlg
 
 namespace ReducedLung
 {
+  class TreeLinearization;
+
   /**
    * @brief Metadata passed to linear solvers for reduced-lung Newton correction systems.
    */
@@ -39,6 +41,12 @@ namespace ReducedLung
     unsigned int nonlinear_iteration = 0;
   };
 
+  enum class NewtonLinearizationType
+  {
+    SparseJacobian,
+    StructuredTreeBlocks,
+  };
+
   /**
    * @brief Interface for reduced-lung Newton correction linear solvers.
    */
@@ -46,6 +54,16 @@ namespace ReducedLung
   {
    public:
     virtual ~NewtonLinearSolver() = default;
+
+    [[nodiscard]] virtual NewtonLinearizationType linearization_type() const
+    {
+      return NewtonLinearizationType::SparseJacobian;
+    }
+
+    virtual void set_tree_linearization(const TreeLinearization& tree_linearization)
+    {
+      (void)tree_linearization;
+    }
 
     /**
      * @brief Solve one Newton correction system.

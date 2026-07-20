@@ -126,6 +126,12 @@ namespace ReducedLung::Airways::WallMechanics
   JacobianEvaluator make_jacobian_evaluator(WallModel& wall_model, FlowModel& flow_model);
 
   /**
+   * @brief Build structured tree-linearization evaluator callback for a wall/flow-model pair.
+   */
+  TreeLinearizationEvaluator make_tree_linearization_evaluator(
+      WallModel& wall_model, FlowModel& flow_model);
+
+  /**
    * @brief Build internal-state updater callback for the concrete wall-model variant.
    */
   InternalStateUpdater make_internal_state_updater(
