@@ -203,4 +203,10 @@ namespace
       EXPECT_EQ(kelvin_voigt.viscosity_eta, (std::vector<double>{0.0, 0.0}));
     }
   }
+
+  TEST(ReducedLungInputPipelineTest, NonlinearSolverDefaultsToNox)
+  {
+    const ReducedLungParameters::Dynamics dynamics{};
+    EXPECT_EQ(dynamics.nonlinear_solver, ReducedLungParameters::NonlinearSolverType::Nox);
+  }
 }  // namespace

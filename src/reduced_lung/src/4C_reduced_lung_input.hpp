@@ -36,6 +36,13 @@ namespace ReducedLung
       high
     };
 
+    enum class NonlinearSolverType : std::uint8_t
+    {
+      Nox,
+      NewtonSparse,
+      NewtonTree
+    };
+
     struct Dynamics
     {
       double time_increment;
@@ -47,6 +54,7 @@ namespace ReducedLung
       double nonlinear_residual_tolerance;
       double nonlinear_increment_tolerance;
       OutputVerbosity output_verbosity = OutputVerbosity::minimal;
+      NonlinearSolverType nonlinear_solver = NonlinearSolverType::Nox;
     } dynamics;
     /**
      * The geometry of the lung tree is read from a VTU mesh file. The mesh provides the

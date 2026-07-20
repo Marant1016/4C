@@ -24,7 +24,11 @@
 #include "4C_reduced_lung_helpers.hpp"
 #include "4C_reduced_lung_input.hpp"
 #include "4C_reduced_lung_junctions.hpp"
+#include "4C_reduced_lung_linear_solver.hpp"
+#include "4C_reduced_lung_newton_solver.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
+#include "4C_reduced_lung_tree_linear_solver.hpp"
+#include "4C_reduced_lung_tree_metadata.hpp"
 #include "4C_utils_exceptions.hpp"
 
 #include <Teuchos_StandardParameterEntryValidators.hpp>
@@ -33,6 +37,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <optional>
 
 
 FOUR_C_NAMESPACE_OPEN
@@ -242,6 +247,28 @@ namespace ReducedLung
         assembly_pipeline_ = create_default_reduced_lung_assembly_pipeline(
             airways_, terminal_units_, connections_, bifurcations_, boundary_conditions_);
 
+        switch (context_.parameters.dynamics.nonlinear_solver)
+        {
+          case ReducedLungParameters::NonlinearSolverType::Nox:
+            build_nox_solver();
+            break;
+          case ReducedLungParameters::NonlinearSolverType::NewtonSparse:
+            build_newton_solver_with_sparse_linear_solver();
+            break;
+          case ReducedLungParameters::NonlinearSolverType::NewtonTree:
+            build_newton_solver_with_tree_linear_solver();
+            break;
+          default:
+            FOUR_C_THROW("Unknown reduced-lung nonlinear solver workflow.");
+        }
+      }
+
+      void build_nox_solver()
+      {
+        FOUR_C_ASSERT_ALWAYS(dofs_ != nullptr && locally_relevant_dofs_ != nullptr &&
+                                 x_ != nullptr && sysmat_ != nullptr,
+            "Reduced lung linear system must be initialized before NOX solver setup.");
+
         const NoxSolverContext nox_solver_context{
             .comm = comm_,
             .dynamics = context_.parameters.dynamics,
@@ -257,6 +284,68 @@ namespace ReducedLung
         nox_solver_ = std::make_unique<NoxSolver>(nox_solver_context, current_time_);
       }
 
+      void build_newton_solver_with_sparse_linear_solver()
+      {
+        FOUR_C_ASSERT_ALWAYS(row_map_ != nullptr,
+            "Reduced lung row map must be initialized before sparse Newton solver setup.");
+        newton_linear_solver_ =
+            std::make_shared<SparseNewtonLinearSolver>(SparseNewtonLinearSolverContext{
+                .comm = comm_,
+                .linear_solver_parameters = context_.linear_solver_parameters,
+                .solver_params_callback = context_.solver_params_callback,
+                .correction_map = *row_map_,
+            });
+        build_newton_solver();
+      }
+
+      void build_newton_solver_with_tree_linear_solver()
+      {
+        int comm_size = 1;
+        MPI_Comm_size(comm_, &comm_size);
+        FOUR_C_ASSERT_ALWAYS(comm_size == 1,
+            "Reduced lung NewtonTree nonlinear solver workflow currently supports only serial "
+            "runs.");
+        FOUR_C_ASSERT_ALWAYS(row_map_ != nullptr && locally_relevant_dof_map_ != nullptr,
+            "Reduced lung maps must be initialized before tree Newton solver setup.");
+
+        tree_metadata_ = build_reduced_lung_tree_metadata(ReducedLungTreeMetadataContext{
+            .parameters = context_.parameters,
+            .first_global_dof_of_ele = first_global_dof_of_ele_,
+            .global_dof_per_ele = global_dof_per_ele_,
+            .airways = airways_,
+            .terminal_units = terminal_units_,
+            .connections = connections_,
+            .bifurcations = bifurcations_,
+            .boundary_conditions = boundary_conditions_,
+            .row_map = *row_map_,
+            .locally_relevant_dof_map = *locally_relevant_dof_map_,
+        });
+        newton_linear_solver_ = std::make_shared<TreeNewtonLinearSolver>(
+            TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_});
+        build_newton_solver();
+      }
+
+      void build_newton_solver()
+      {
+        FOUR_C_ASSERT_ALWAYS(dofs_ != nullptr && locally_relevant_dofs_ != nullptr &&
+                                 x_ != nullptr && sysmat_ != nullptr,
+            "Reduced lung linear system must be initialized before custom Newton solver setup.");
+        FOUR_C_ASSERT_ALWAYS(newton_linear_solver_ != nullptr,
+            "Reduced lung custom Newton solver requires a Newton linear solver.");
+
+        const NewtonSolverContext newton_solver_context{
+            .dynamics = context_.parameters.dynamics,
+            .linear_solver = newton_linear_solver_,
+            .assembly_pipeline = assembly_pipeline_,
+            .dofs = *dofs_,
+            .locally_relevant_dofs = *locally_relevant_dofs_,
+            .x = *x_,
+            .jacobian = *sysmat_,
+        };
+
+        newton_solver_ = std::make_unique<NewtonSolver>(newton_solver_context, current_time_);
+      }
+
       void solve_timestep(int step)
       {
         if (Core::Communication::my_mpi_rank(comm_) == 0)
@@ -266,7 +355,7 @@ namespace ReducedLung
                     << std::flush;
         }
 
-        FOUR_C_ASSERT_ALWAYS(nox_solver_ != nullptr,
+        FOUR_C_ASSERT_ALWAYS(nox_solver_ != nullptr || newton_solver_ != nullptr,
             "Reduced lung solver must be initialized before time integration.");
         FOUR_C_ASSERT_ALWAYS(locally_relevant_dofs_ != nullptr,
             "Reduced lung locally relevant dof vector must be initialized before time "
@@ -276,7 +365,14 @@ namespace ReducedLung
         // Constant during the solve, so refresh once per timestep rather than per iteration.
         BoundaryConditions::refresh_total_terminal_unit_volume(
             boundary_conditions_, terminal_units_, comm_);
-        nox_solver_->solve(current_time_);
+        if (nox_solver_ != nullptr)
+        {
+          nox_solver_->solve(current_time_);
+        }
+        else
+        {
+          newton_solver_->solve(current_time_);
+        }
 
         TerminalUnits::end_of_timestep_routine(terminal_units_, *locally_relevant_dofs_, dt_);
         Airways::end_of_timestep_routine(airways_, *locally_relevant_dofs_, dt_);
@@ -330,6 +426,9 @@ namespace ReducedLung
       ReducedLungAssemblyPipeline assembly_pipeline_;
 
       std::unique_ptr<NoxSolver> nox_solver_;
+      std::unique_ptr<NewtonSolver> newton_solver_;
+      std::shared_ptr<NewtonLinearSolver> newton_linear_solver_;
+      std::optional<ReducedLungTreeMetadata> tree_metadata_;
       const double dt_;
       const int n_timesteps_;
       double current_time_ = 0.0;
