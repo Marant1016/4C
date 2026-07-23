@@ -29,6 +29,7 @@ namespace Core::LinAlg
 
 namespace ReducedLung
 {
+  struct SparseNewtonLinearSolverProfile;
   class TreeLinearization;
 
   /**
@@ -85,6 +86,7 @@ namespace ReducedLung
     const Teuchos::ParameterList& linear_solver_parameters;
     std::function<const Teuchos::ParameterList&(int)> solver_params_callback;
     const Core::LinAlg::Map& correction_map;
+    SparseNewtonLinearSolverProfile* profile = nullptr;
   };
 
   /**
@@ -102,6 +104,7 @@ namespace ReducedLung
    private:
     std::shared_ptr<Core::LinAlg::Solver> linear_solver_;
     std::unique_ptr<Core::LinAlg::Vector<double>> rhs_;
+    SparseNewtonLinearSolverProfile* profile_ = nullptr;
   };
 }  // namespace ReducedLung
 

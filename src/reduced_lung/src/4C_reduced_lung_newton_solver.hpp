@@ -27,6 +27,8 @@ namespace Core::LinAlg
 
 namespace ReducedLung
 {
+  struct NewtonSolverProfile;
+
   /**
    * @brief Context bundling all objects required by @ref NewtonSolver.
    */
@@ -39,6 +41,7 @@ namespace ReducedLung
     Core::LinAlg::Vector<double>& locally_relevant_dofs;   ///< Ghosted dof vector.
     Core::LinAlg::Vector<double>& x;                       ///< Nonlinear solution vector.
     Core::LinAlg::SparseMatrix& jacobian;                  ///< Newton-system Jacobian matrix.
+    NewtonSolverProfile* profile = nullptr;                ///< Optional benchmark profile sink.
   };
 
   /**
@@ -101,6 +104,7 @@ namespace ReducedLung
     double nonlinear_increment_tolerance_;
 
     std::shared_ptr<NewtonLinearSolver> linear_solver_;
+    NewtonSolverProfile* profile_ = nullptr;
   };
 }  // namespace ReducedLung
 

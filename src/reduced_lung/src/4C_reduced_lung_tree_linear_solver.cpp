@@ -11,12 +11,14 @@
 
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_vector.hpp"
+#include "4C_reduced_lung_solver_profile.hpp"
 #include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_utils_exceptions.hpp"
 
 #include <mpi.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -29,6 +31,13 @@ namespace ReducedLung
 {
   namespace
   {
+    using Clock = std::chrono::steady_clock;
+
+    double elapsed_seconds(const Clock::time_point start)
+    {
+      return std::chrono::duration<double>(Clock::now() - start).count();
+    }
+
     class TreeCoefficientProvider
     {
      public:
@@ -40,13 +49,15 @@ namespace ReducedLung
     class SparseTreeCoefficientProvider : public TreeCoefficientProvider
     {
      public:
-      explicit SparseTreeCoefficientProvider(const Core::LinAlg::SparseMatrix& jacobian)
-          : jacobian_(jacobian)
+      explicit SparseTreeCoefficientProvider(
+          const Core::LinAlg::SparseMatrix& jacobian, TreeNewtonLinearSolverProfile* profile)
+          : jacobian_(jacobian), profile_(profile)
       {
       }
 
       [[nodiscard]] double value(int local_row, int local_col, double tolerance) const override
       {
+        const auto lookup_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
         FOUR_C_ASSERT_ALWAYS(local_row >= 0 && local_row < jacobian_.num_my_rows(),
             "TreeNewtonLinearSolver matrix row {} is not locally available.", local_row);
         FOUR_C_ASSERT_ALWAYS(local_col >= 0,
@@ -61,34 +72,55 @@ namespace ReducedLung
         {
           if (columns[i] == local_col)
           {
+            record_lookup(lookup_start);
             return values[i];
           }
         }
 
         (void)tolerance;
+        record_lookup(lookup_start);
         return 0.0;
       }
 
      private:
+      void record_lookup(const Clock::time_point lookup_start) const
+      {
+        if (profile_ != nullptr)
+        {
+          profile_->coefficient_lookup_time += elapsed_seconds(lookup_start);
+          ++profile_->coefficient_lookup_count;
+        }
+      }
+
       const Core::LinAlg::SparseMatrix& jacobian_;
+      TreeNewtonLinearSolverProfile* profile_ = nullptr;
     };
 
     class StructuredTreeCoefficientProvider : public TreeCoefficientProvider
     {
      public:
-      explicit StructuredTreeCoefficientProvider(const TreeLinearization& linearization)
-          : linearization_(linearization)
+      explicit StructuredTreeCoefficientProvider(
+          const TreeLinearization& linearization, TreeNewtonLinearSolverProfile* profile)
+          : linearization_(linearization), profile_(profile)
       {
       }
 
       [[nodiscard]] double value(int local_row, int local_col, double tolerance) const override
       {
         (void)tolerance;
-        return linearization_.value(local_row, local_col);
+        const auto lookup_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
+        const double coefficient = linearization_.value(local_row, local_col);
+        if (profile_ != nullptr)
+        {
+          profile_->coefficient_lookup_time += elapsed_seconds(lookup_start);
+          ++profile_->coefficient_lookup_count;
+        }
+        return coefficient;
       }
 
      private:
       const TreeLinearization& linearization_;
+      TreeNewtonLinearSolverProfile* profile_ = nullptr;
     };
 
     const TreeJunctionMetadata* find_junction_for_parent(
@@ -262,7 +294,8 @@ namespace ReducedLung
   TreeNewtonLinearSolver::TreeNewtonLinearSolver(const TreeNewtonLinearSolverContext& context)
       : tree_metadata_(context.tree_metadata),
         pivot_tolerance_(context.pivot_tolerance),
-        coefficient_source_(context.coefficient_source)
+        coefficient_source_(context.coefficient_source),
+        profile_(context.profile)
   {
     FOUR_C_ASSERT_ALWAYS(pivot_tolerance_ > 0.0,
         "TreeNewtonLinearSolver requires a positive pivot tolerance, got {}.", pivot_tolerance_);
@@ -284,6 +317,12 @@ namespace ReducedLung
     subtree_relations_.assign(tree_metadata_.elements.size(), SubtreeRelation{});
     inlet_pressure_by_element_.assign(
         tree_metadata_.elements.size(), std::numeric_limits<double>::quiet_NaN());
+    if (profile_ != nullptr)
+    {
+      profile_->element_count = 0;
+      profile_->total_local_block_dofs = 0;
+      profile_->max_local_block_size = 0;
+    }
 
     for (std::size_t element_index = 0; element_index < tree_metadata_.elements.size();
         ++element_index)
@@ -362,6 +401,13 @@ namespace ReducedLung
 
       auto& workspace = element_workspaces_[element_index];
       const std::size_t block_size = plan.unknown_global_dof_ids.size();
+      if (profile_ != nullptr)
+      {
+        ++profile_->element_count;
+        profile_->total_local_block_dofs += block_size;
+        profile_->max_local_block_size =
+            std::max(profile_->max_local_block_size, static_cast<int>(block_size));
+      }
       workspace.matrix.assign(block_size, std::vector<double>(block_size, 0.0));
       workspace.rhs_constant.assign(block_size, 0.0);
       workspace.rhs_inlet_pressure.assign(block_size, 0.0);
@@ -392,6 +438,7 @@ namespace ReducedLung
   {
     (void)x;
     (void)metadata;
+    const auto solve_start = Clock::now();
 
     int comm_size = 1;
     MPI_Comm_size(delta.get_comm(), &comm_size);
@@ -419,12 +466,12 @@ namespace ReducedLung
 
     delta.put_scalar(0.0);
 
-    SparseTreeCoefficientProvider sparse_coefficients(jacobian);
+    SparseTreeCoefficientProvider sparse_coefficients(jacobian, profile_);
     std::optional<StructuredTreeCoefficientProvider> structured_coefficients;
     const TreeCoefficientProvider* coefficients = &sparse_coefficients;
     if (coefficient_source_ == TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks)
     {
-      structured_coefficients.emplace(*tree_linearization_);
+      structured_coefficients.emplace(*tree_linearization_, profile_);
       coefficients = &*structured_coefficients;
     }
 
@@ -446,6 +493,7 @@ namespace ReducedLung
 
     std::fill(subtree_relations_.begin(), subtree_relations_.end(), SubtreeRelation{});
 
+    const auto bottom_up_start = Clock::now();
     for (const auto& layer : tree_metadata_.bottom_up_layers)
     {
       for (const int element_index : layer)
@@ -505,14 +553,24 @@ namespace ReducedLung
           workspace.rhs_constant[equation_index] -= rhs_shift;
         }
 
+        const auto dense_solve_start = Clock::now();
         solve_dense_system(workspace.matrix, workspace.rhs_constant, workspace.rhs_inlet_pressure,
             workspace.intercept, workspace.slope, pivot_tolerance_, plan.context);
+        if (profile_ != nullptr)
+        {
+          profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
+          ++profile_->dense_solve_count;
+        }
 
         subtree_relations_[static_cast<std::size_t>(element_index)] = SubtreeRelation{
             .G = workspace.slope[static_cast<std::size_t>(plan.inlet_flow_unknown_index)],
             .h = workspace.intercept[static_cast<std::size_t>(plan.inlet_flow_unknown_index)],
         };
       }
+    }
+    if (profile_ != nullptr)
+    {
+      profile_->bottom_up_time += elapsed_seconds(bottom_up_start);
     }
 
     std::fill(inlet_pressure_by_element_.begin(), inlet_pressure_by_element_.end(),
@@ -522,6 +580,7 @@ namespace ReducedLung
     inlet_pressure_by_element_[static_cast<std::size_t>(tree_metadata_.root_element_index)] =
         rhs_value(residual, root_boundary_row_) / root_boundary_coeff;
 
+    const auto top_down_start = Clock::now();
     for (const auto& layer : tree_metadata_.top_down_layers)
     {
       for (const int element_index : layer)
@@ -565,6 +624,12 @@ namespace ReducedLung
               workspace.child_pressure_intercept[child_interface_index];
         }
       }
+    }
+    if (profile_ != nullptr)
+    {
+      profile_->top_down_time += elapsed_seconds(top_down_start);
+      profile_->total_solve_time += elapsed_seconds(solve_start);
+      ++profile_->solve_count;
     }
   }
 }  // namespace ReducedLung

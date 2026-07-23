@@ -20,6 +20,8 @@ FOUR_C_NAMESPACE_OPEN
 
 namespace ReducedLung
 {
+  struct TreeNewtonLinearSolverProfile;
+
   enum class TreeNewtonLinearSolverCoefficientSource
   {
     SparseJacobian,
@@ -35,6 +37,7 @@ namespace ReducedLung
     double pivot_tolerance = 1.0e-12;
     TreeNewtonLinearSolverCoefficientSource coefficient_source =
         TreeNewtonLinearSolverCoefficientSource::SparseJacobian;
+    TreeNewtonLinearSolverProfile* profile = nullptr;
   };
 
   /**
@@ -104,6 +107,7 @@ namespace ReducedLung
     double pivot_tolerance_;
     TreeNewtonLinearSolverCoefficientSource coefficient_source_;
     const TreeLinearization* tree_linearization_ = nullptr;
+    TreeNewtonLinearSolverProfile* profile_ = nullptr;
 
     int root_boundary_row_ = -1;
     int root_inlet_pressure_local_dof_ = -1;

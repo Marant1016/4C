@@ -61,6 +61,7 @@ namespace Core::Rebalance
 
 namespace ReducedLung
 {
+  struct NoxSolverProfile;
   class TreeLinearization;
 
   /**
@@ -110,6 +111,7 @@ namespace ReducedLung
     Core::LinAlg::Vector<double>& locally_relevant_dofs;   ///< Ghosted dof vector.
     Core::LinAlg::Vector<double>& x;                       ///< NOX solution vector.
     Core::LinAlg::SparseOperator& jacobian;                ///< NOX Jacobian operator.
+    NoxSolverProfile* profile = nullptr;                   ///< Optional benchmark profile sink.
   };
 
   /**
@@ -212,6 +214,7 @@ namespace ReducedLung
     double current_time_;
 
     std::shared_ptr<Core::LinAlg::Solver> linear_solver_;
+    NoxSolverProfile* profile_ = nullptr;
 
     // NOX adapter
     std::optional<NOX::Nln::Adapter> adapter_;

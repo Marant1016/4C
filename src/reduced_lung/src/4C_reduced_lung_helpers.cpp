@@ -25,6 +25,7 @@
 #include "4C_reduced_lung_airways.hpp"
 #include "4C_reduced_lung_airways_model_registry.hpp"
 #include "4C_reduced_lung_input.hpp"
+#include "4C_reduced_lung_solver_profile.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
 #include "4C_reduced_lung_terminal_unit_model_registry.hpp"
 #include "4C_utils_exceptions.hpp"
@@ -32,6 +33,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <ranges>
@@ -44,6 +46,16 @@ FOUR_C_NAMESPACE_OPEN
 
 namespace ReducedLung
 {
+  namespace
+  {
+    using Clock = std::chrono::steady_clock;
+
+    double elapsed_seconds(const Clock::time_point start)
+    {
+      return std::chrono::duration<double>(Clock::now() - start).count();
+    }
+  }  // namespace
+
   using namespace TerminalUnits;
   using namespace Airways;
 
@@ -175,7 +187,8 @@ namespace ReducedLung
         dt_(context.dynamics.time_increment),
         current_time_(initial_time),
         linear_solver_(std::make_shared<Core::LinAlg::Solver>(context.linear_solver_parameters,
-            context.comm, context.solver_params_callback, Core::IO::Verbositylevel::minimal))
+            context.comm, context.solver_params_callback, Core::IO::Verbositylevel::minimal)),
+        profile_(context.profile)
   {
     if (!linear_solver_)
     {
@@ -214,9 +227,16 @@ namespace ReducedLung
 
   unsigned int NoxSolver::solve(double time)
   {
+    const auto solve_start = Clock::now();
     current_time_ = time;
     unsigned int iterations = adapter_->solve();
     sync_state_from_x(x_solution_);
+    if (profile_ != nullptr)
+    {
+      profile_->total_solve_time += elapsed_seconds(solve_start);
+      profile_->last_nonlinear_iterations = iterations;
+      ++profile_->solve_count;
+    }
 
     return iterations;
   }
@@ -224,11 +244,22 @@ namespace ReducedLung
   bool NoxSolver::residual(const Core::LinAlg::Vector<double>& x,
       Core::LinAlg::Vector<double>& residual, NOX::Nln::FillType /*fill_type*/)
   {
+    const auto sync_start = Clock::now();
     sync_state_from_x(x);
+    if (profile_ != nullptr)
+    {
+      profile_->state_sync_time += elapsed_seconds(sync_start);
+    }
 
+    const auto assembly_start = Clock::now();
     for (const auto& assemble_residual : assembly_pipeline_.residual_assemblers)
     {
       assemble_residual(residual, locally_relevant_dofs_, current_time_, dt_);
+    }
+    if (profile_ != nullptr)
+    {
+      profile_->residual_assembly_time += elapsed_seconds(assembly_start);
+      ++profile_->residual_evaluation_count;
     }
 
     return true;
@@ -236,7 +267,12 @@ namespace ReducedLung
 
   bool NoxSolver::jacobian(const Core::LinAlg::Vector<double>& x, Core::LinAlg::SparseOperator& jac)
   {
+    const auto sync_start = Clock::now();
     sync_state_from_x(x);
+    if (profile_ != nullptr)
+    {
+      profile_->state_sync_time += elapsed_seconds(sync_start);
+    }
 
     auto* jac_matrix = dynamic_cast<Core::LinAlg::SparseMatrix*>(&jac);
     if (jac_matrix == nullptr)
@@ -245,12 +281,29 @@ namespace ReducedLung
           "ReducedLung NOX assembly requires Core::LinAlg::SparseMatrix Jacobian operator.");
     }
 
+    const auto assembly_start = Clock::now();
     for (const auto& assemble_jacobian : assembly_pipeline_.jacobian_assemblers)
     {
       assemble_jacobian(*jac_matrix, locally_relevant_dofs_, current_time_, dt_);
     }
+    if (profile_ != nullptr)
+    {
+      profile_->sparse_jacobian_assembly_time += elapsed_seconds(assembly_start);
+    }
 
-    if (!jac_matrix->filled()) jac_matrix->complete();
+    if (!jac_matrix->filled())
+    {
+      const auto complete_start = Clock::now();
+      jac_matrix->complete();
+      if (profile_ != nullptr)
+      {
+        profile_->sparse_jacobian_complete_time += elapsed_seconds(complete_start);
+      }
+    }
+    if (profile_ != nullptr)
+    {
+      ++profile_->jacobian_evaluation_count;
+    }
 
     return true;
   }

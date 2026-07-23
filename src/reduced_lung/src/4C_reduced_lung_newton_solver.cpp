@@ -12,13 +12,26 @@
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_utils_sparse_algebra_manipulation.hpp"
 #include "4C_linalg_vector.hpp"
+#include "4C_reduced_lung_solver_profile.hpp"
 #include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_utils_exceptions.hpp"
+
+#include <chrono>
 
 FOUR_C_NAMESPACE_OPEN
 
 namespace ReducedLung
 {
+  namespace
+  {
+    using Clock = std::chrono::steady_clock;
+
+    double elapsed_seconds(const Clock::time_point start)
+    {
+      return std::chrono::duration<double>(Clock::now() - start).count();
+    }
+  }  // namespace
+
   NewtonSolver::NewtonSolver(const NewtonSolverContext& context, double initial_time)
       : x_solution_(context.x),
         dofs_(context.dofs),
@@ -34,7 +47,8 @@ namespace ReducedLung
             static_cast<unsigned int>(context.dynamics.max_nonlinear_iterations)),
         nonlinear_residual_tolerance_(context.dynamics.nonlinear_residual_tolerance),
         nonlinear_increment_tolerance_(context.dynamics.nonlinear_increment_tolerance),
-        linear_solver_(context.linear_solver)
+        linear_solver_(context.linear_solver),
+        profile_(context.profile)
   {
     if (context.dynamics.max_nonlinear_iterations <= 0)
     {
@@ -65,19 +79,40 @@ namespace ReducedLung
 
   unsigned int NewtonSolver::solve(double time)
   {
+    const auto solve_start = Clock::now();
     current_time_ = time;
     double increment_norm = 0.0;
+    if (profile_ != nullptr)
+    {
+      profile_->last_residual_norms.clear();
+      profile_->last_increment_norms.clear();
+    }
 
     for (unsigned int iteration = 0; iteration <= max_nonlinear_iterations_; ++iteration)
     {
+      const auto sync_start = Clock::now();
       sync_state_from_x(x_solution_);
+      if (profile_ != nullptr)
+      {
+        profile_->state_sync_time += elapsed_seconds(sync_start);
+      }
       const double residual_norm = assemble_residual_for_current_state();
+      if (profile_ != nullptr)
+      {
+        profile_->last_residual_norms.push_back(residual_norm);
+      }
       const bool residual_converged = residual_norm <= nonlinear_residual_tolerance_;
       const bool increment_converged =
           iteration == 0 || increment_norm <= nonlinear_increment_tolerance_;
 
       if (residual_converged && increment_converged)
       {
+        if (profile_ != nullptr)
+        {
+          profile_->total_solve_time += elapsed_seconds(solve_start);
+          profile_->last_nonlinear_iterations = iteration;
+          ++profile_->solve_count;
+        }
         return iteration;
       }
 
@@ -98,6 +133,10 @@ namespace ReducedLung
         assemble_jacobian_for_current_state();
       }
       increment_norm = solve_linear_correction(iteration);
+      if (profile_ != nullptr)
+      {
+        profile_->last_increment_norms.push_back(increment_norm);
+      }
       x_solution_.update(1.0, delta_, 1.0);
     }
 
@@ -118,9 +157,14 @@ namespace ReducedLung
   double NewtonSolver::assemble_residual_for_current_state()
   {
     residual_.put_scalar(0.0);
+    const auto assembly_start = Clock::now();
     for (const auto& assemble_residual : assembly_pipeline_.residual_assemblers)
     {
       assemble_residual(residual_, locally_relevant_dofs_, current_time_, dt_);
+    }
+    if (profile_ != nullptr)
+    {
+      profile_->residual_assembly_time += elapsed_seconds(assembly_start);
     }
 
     double residual_norm = 0.0;
@@ -130,22 +174,40 @@ namespace ReducedLung
 
   void NewtonSolver::assemble_jacobian_for_current_state()
   {
+    const auto assembly_start = Clock::now();
     for (const auto& assemble_jacobian : assembly_pipeline_.jacobian_assemblers)
     {
       assemble_jacobian(jacobian_, locally_relevant_dofs_, current_time_, dt_);
     }
+    if (profile_ != nullptr)
+    {
+      profile_->sparse_jacobian_assembly_time += elapsed_seconds(assembly_start);
+    }
 
-    if (!jacobian_.filled()) jacobian_.complete();
+    if (!jacobian_.filled())
+    {
+      const auto complete_start = Clock::now();
+      jacobian_.complete();
+      if (profile_ != nullptr)
+      {
+        profile_->sparse_jacobian_complete_time += elapsed_seconds(complete_start);
+      }
+    }
   }
 
   void NewtonSolver::assemble_tree_linearization_for_current_state()
   {
+    const auto assembly_start = Clock::now();
     tree_linearization_.reset(residual_.local_length(), locally_relevant_dofs_.local_length());
     for (const auto& assemble_tree_linearization : assembly_pipeline_.tree_linearization_assemblers)
     {
       assemble_tree_linearization(tree_linearization_, locally_relevant_dofs_, current_time_, dt_);
     }
     linear_solver_->set_tree_linearization(tree_linearization_);
+    if (profile_ != nullptr)
+    {
+      profile_->structured_tree_linearization_assembly_time += elapsed_seconds(assembly_start);
+    }
   }
 
   double NewtonSolver::solve_linear_correction(unsigned int iteration)
@@ -155,7 +217,12 @@ namespace ReducedLung
         .time_step_size_dt = dt_,
         .nonlinear_iteration = iteration,
     };
+    const auto linear_solve_start = Clock::now();
     linear_solver_->solve(jacobian_, residual_, x_solution_, metadata, delta_);
+    if (profile_ != nullptr)
+    {
+      profile_->linear_solve_time += elapsed_seconds(linear_solve_start);
+    }
 
     double increment_norm = 0.0;
     delta_.norm_2(&increment_norm);
