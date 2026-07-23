@@ -40,6 +40,8 @@ namespace ReducedLung
 
     [[nodiscard]] double value(int local_row_id, int local_dof_id) const;
 
+    [[nodiscard]] const std::vector<std::pair<int, double>>& entries(int local_row_id) const;
+
     [[nodiscard]] int num_rows() const { return num_rows_; }
 
     [[nodiscard]] int num_dofs() const { return num_dofs_; }

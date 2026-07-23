@@ -9,10 +9,12 @@
 
 #include "4C_reduced_lung_tree_metadata.hpp"
 
+#include "4C_comm_mpi_utils.hpp"
 #include "4C_linalg_map.hpp"
 #include "4C_utils_exceptions.hpp"
 
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <utility>
 
@@ -27,6 +29,7 @@ namespace ReducedLung
       int first_local_equation_id = -1;
       int first_global_equation_id = -1;
       int num_equations = 0;
+      int owner_rank = -1;
     };
 
     TreeElementKind map_element_kind(ReducedLungParameters::LungTree::ElementType type)
@@ -62,7 +65,7 @@ namespace ReducedLung
 
     void insert_element_equation_metadata(std::map<int, ElementEquationMetadata>& equation_metadata,
         int global_element_id, int first_local_equation_id, int num_equations,
-        const Core::LinAlg::Map& row_map)
+        const Core::LinAlg::Map& row_map, int owner_rank)
     {
       FOUR_C_ASSERT_ALWAYS(first_local_equation_id >= 0,
           "Missing local state-equation id for reduced-lung element {}.", global_element_id + 1);
@@ -70,6 +73,7 @@ namespace ReducedLung
           .first_local_equation_id = first_local_equation_id,
           .first_global_equation_id = row_map.gid(first_local_equation_id),
           .num_equations = num_equations,
+          .owner_rank = owner_rank,
       };
       const auto insert_result = equation_metadata.emplace(global_element_id, metadata);
       FOUR_C_ASSERT_ALWAYS(insert_result.second,
@@ -82,6 +86,7 @@ namespace ReducedLung
         const Core::LinAlg::Map& row_map)
     {
       std::map<int, ElementEquationMetadata> equation_metadata;
+      const int owner_rank = Core::Communication::my_mpi_rank(row_map.get_comm());
 
       for (const auto& model : airways.models)
       {
@@ -91,7 +96,7 @@ namespace ReducedLung
           FOUR_C_ASSERT_ALWAYS(i < data.local_row_id.size(),
               "Missing airway local row id for element {}.", data.global_element_id[i] + 1);
           insert_element_equation_metadata(equation_metadata, data.global_element_id[i],
-              data.local_row_id[i], data.n_state_equations, row_map);
+              data.local_row_id[i], data.n_state_equations, row_map, owner_rank);
         }
       }
 
@@ -102,8 +107,8 @@ namespace ReducedLung
         {
           FOUR_C_ASSERT_ALWAYS(i < data.local_row_id.size(),
               "Missing terminal-unit local row id for element {}.", data.global_element_id[i] + 1);
-          insert_element_equation_metadata(
-              equation_metadata, data.global_element_id[i], data.local_row_id[i], 1, row_map);
+          insert_element_equation_metadata(equation_metadata, data.global_element_id[i],
+              data.local_row_id[i], 1, row_map, owner_rank);
         }
       }
 
@@ -276,39 +281,53 @@ namespace ReducedLung
     }
 
     void add_connection_metadata(ReducedLungTreeMetadata& metadata,
-        const Junctions::ConnectionData& connections,
+        const std::map<int, int>& child_by_parent,
+        const std::map<int, int>& first_global_equation_by_parent,
+        const std::map<int, int>& owner_by_parent, const Core::LinAlg::Map& row_map,
+        const Core::LinAlg::Map& locally_relevant_dof_map,
         std::map<int, TreeJunctionKind>& junction_kind)
     {
-      for (std::size_t i = 0; i < connections.size(); ++i)
+      for (const auto& [parent_global_id, child_global_id] : child_by_parent)
       {
-        const int parent_index = element_index(metadata, connections.global_parent_element_id[i]);
-        const int child_index = element_index(metadata, connections.global_child_element_id[i]);
+        const int parent_index = element_index(metadata, parent_global_id);
+        const int child_index = element_index(metadata, child_global_id);
         FOUR_C_ASSERT_ALWAYS(
             has_child(metadata.elements[static_cast<std::size_t>(parent_index)], child_index),
             "Connection metadata for parent element {} and child element {} does not match the "
             "directed topology.",
-            connections.global_parent_element_id[i] + 1,
-            connections.global_child_element_id[i] + 1);
+            parent_global_id + 1, child_global_id + 1);
+
+        const auto first_global_equation_it =
+            first_global_equation_by_parent.find(parent_global_id);
+        FOUR_C_ASSERT_ALWAYS(first_global_equation_it != first_global_equation_by_parent.end(),
+            "Missing global equation id for connection at parent element {}.",
+            parent_global_id + 1);
+        const auto owner_it = owner_by_parent.find(parent_global_id);
+        FOUR_C_ASSERT_ALWAYS(owner_it != owner_by_parent.end(),
+            "Missing owner rank for connection at parent element {}.", parent_global_id + 1);
+
+        const auto& parent = metadata.elements[static_cast<std::size_t>(parent_index)];
+        const auto& child = metadata.elements[static_cast<std::size_t>(child_index)];
+        const std::vector<int> global_dof_ids{parent.first_global_dof + 1, child.first_global_dof,
+            parent.first_global_dof + parent.num_dofs - 1, child.first_global_dof + 2};
 
         TreeJunctionMetadata junction;
         junction.kind = TreeJunctionKind::Connection;
         junction.parent_element_index = parent_index;
         junction.child_element_indices[0] = child_index;
         junction.child_count = 1;
-        junction.first_local_equation_id = connections.first_local_equation_id[i];
-        junction.first_global_equation_id = connections.first_global_equation_id[i];
+        junction.first_global_equation_id = first_global_equation_it->second;
+        junction.first_local_equation_id = row_map.lid(junction.first_global_equation_id);
         junction.num_equations = 2;
-        junction.global_dof_ids.assign(
-            connections.global_dof_ids[i].begin(), connections.global_dof_ids[i].end());
-        junction.local_dof_ids.assign(
-            connections.local_dof_ids[i].begin(), connections.local_dof_ids[i].end());
+        junction.owner_rank = owner_it->second;
+        junction.global_dof_ids = global_dof_ids;
+        junction.local_dof_ids = local_ids_for_global_ids(locally_relevant_dof_map, global_dof_ids);
         metadata.junctions.push_back(junction);
 
         const auto insert_result =
             junction_kind.emplace(parent_index, TreeJunctionKind::Connection);
         FOUR_C_ASSERT_ALWAYS(insert_result.second,
-            "Duplicate junction metadata for parent element {}.",
-            connections.global_parent_element_id[i] + 1);
+            "Duplicate junction metadata for parent element {}.", parent_global_id + 1);
       }
     }
 
@@ -320,21 +339,42 @@ namespace ReducedLung
     }
 
     void add_bifurcation_metadata(ReducedLungTreeMetadata& metadata,
-        const Junctions::BifurcationData& bifurcations,
+        const std::map<int, int>& child_1_by_parent, const std::map<int, int>& child_2_by_parent,
+        const std::map<int, int>& first_global_equation_by_parent,
+        const std::map<int, int>& owner_by_parent, const Core::LinAlg::Map& row_map,
+        const Core::LinAlg::Map& locally_relevant_dof_map,
         std::map<int, TreeJunctionKind>& junction_kind)
     {
-      for (std::size_t i = 0; i < bifurcations.size(); ++i)
+      for (const auto& [parent_global_id, child_1_global_id] : child_1_by_parent)
       {
-        const int parent_index = element_index(metadata, bifurcations.global_parent_element_id[i]);
-        const int child_1_index =
-            element_index(metadata, bifurcations.global_child_1_element_id[i]);
-        const int child_2_index =
-            element_index(metadata, bifurcations.global_child_2_element_id[i]);
+        const auto child_2_it = child_2_by_parent.find(parent_global_id);
+        FOUR_C_ASSERT_ALWAYS(child_2_it != child_2_by_parent.end(),
+            "Missing second child for bifurcation at parent element {}.", parent_global_id + 1);
+        const int child_2_global_id = child_2_it->second;
+        const int parent_index = element_index(metadata, parent_global_id);
+        const int child_1_index = element_index(metadata, child_1_global_id);
+        const int child_2_index = element_index(metadata, child_2_global_id);
         FOUR_C_ASSERT_ALWAYS(
             bifurcation_children_match(metadata.elements[static_cast<std::size_t>(parent_index)],
                 child_1_index, child_2_index),
             "Bifurcation metadata for parent element {} does not match the directed topology.",
-            bifurcations.global_parent_element_id[i] + 1);
+            parent_global_id + 1);
+
+        const auto first_global_equation_it =
+            first_global_equation_by_parent.find(parent_global_id);
+        FOUR_C_ASSERT_ALWAYS(first_global_equation_it != first_global_equation_by_parent.end(),
+            "Missing global equation id for bifurcation at parent element {}.",
+            parent_global_id + 1);
+        const auto owner_it = owner_by_parent.find(parent_global_id);
+        FOUR_C_ASSERT_ALWAYS(owner_it != owner_by_parent.end(),
+            "Missing owner rank for bifurcation at parent element {}.", parent_global_id + 1);
+
+        const auto& parent = metadata.elements[static_cast<std::size_t>(parent_index)];
+        const auto& child_1 = metadata.elements[static_cast<std::size_t>(child_1_index)];
+        const auto& child_2 = metadata.elements[static_cast<std::size_t>(child_2_index)];
+        const std::vector<int> global_dof_ids{parent.first_global_dof + 1, child_1.first_global_dof,
+            child_2.first_global_dof, parent.first_global_dof + parent.num_dofs - 1,
+            child_1.first_global_dof + 2, child_2.first_global_dof + 2};
 
         TreeJunctionMetadata junction;
         junction.kind = TreeJunctionKind::Bifurcation;
@@ -342,20 +382,18 @@ namespace ReducedLung
         junction.child_element_indices[0] = child_1_index;
         junction.child_element_indices[1] = child_2_index;
         junction.child_count = 2;
-        junction.first_local_equation_id = bifurcations.first_local_equation_id[i];
-        junction.first_global_equation_id = bifurcations.first_global_equation_id[i];
+        junction.first_global_equation_id = first_global_equation_it->second;
+        junction.first_local_equation_id = row_map.lid(junction.first_global_equation_id);
         junction.num_equations = 3;
-        junction.global_dof_ids.assign(
-            bifurcations.global_dof_ids[i].begin(), bifurcations.global_dof_ids[i].end());
-        junction.local_dof_ids.assign(
-            bifurcations.local_dof_ids[i].begin(), bifurcations.local_dof_ids[i].end());
+        junction.owner_rank = owner_it->second;
+        junction.global_dof_ids = global_dof_ids;
+        junction.local_dof_ids = local_ids_for_global_ids(locally_relevant_dof_map, global_dof_ids);
         metadata.junctions.push_back(junction);
 
         const auto insert_result =
             junction_kind.emplace(parent_index, TreeJunctionKind::Bifurcation);
         FOUR_C_ASSERT_ALWAYS(insert_result.second,
-            "Duplicate junction metadata for parent element {}.",
-            bifurcations.global_parent_element_id[i] + 1);
+            "Duplicate junction metadata for parent element {}.", parent_global_id + 1);
       }
     }
 
@@ -391,11 +429,62 @@ namespace ReducedLung
 
     void build_junction_metadata(ReducedLungTreeMetadata& metadata,
         const Junctions::ConnectionData& connections,
-        const Junctions::BifurcationData& bifurcations)
+        const Junctions::BifurcationData& bifurcations, const Core::LinAlg::Map& row_map,
+        const Core::LinAlg::Map& locally_relevant_dof_map)
     {
+      const MPI_Comm comm = row_map.get_comm();
+      const int owner_rank = Core::Communication::my_mpi_rank(comm);
+
+      std::map<int, int> local_connection_child_by_parent;
+      std::map<int, int> local_connection_first_equation_by_parent;
+      std::map<int, int> local_connection_owner_by_parent;
+      for (std::size_t i = 0; i < connections.size(); ++i)
+      {
+        const int parent_global_id = connections.global_parent_element_id[i];
+        local_connection_child_by_parent[parent_global_id] = connections.global_child_element_id[i];
+        local_connection_first_equation_by_parent[parent_global_id] =
+            connections.first_global_equation_id[i];
+        local_connection_owner_by_parent[parent_global_id] = owner_rank;
+      }
+
+      std::map<int, int> local_bifurcation_child_1_by_parent;
+      std::map<int, int> local_bifurcation_child_2_by_parent;
+      std::map<int, int> local_bifurcation_first_equation_by_parent;
+      std::map<int, int> local_bifurcation_owner_by_parent;
+      for (std::size_t i = 0; i < bifurcations.size(); ++i)
+      {
+        const int parent_global_id = bifurcations.global_parent_element_id[i];
+        local_bifurcation_child_1_by_parent[parent_global_id] =
+            bifurcations.global_child_1_element_id[i];
+        local_bifurcation_child_2_by_parent[parent_global_id] =
+            bifurcations.global_child_2_element_id[i];
+        local_bifurcation_first_equation_by_parent[parent_global_id] =
+            bifurcations.first_global_equation_id[i];
+        local_bifurcation_owner_by_parent[parent_global_id] = owner_rank;
+      }
+
+      const auto connection_child_by_parent =
+          Core::Communication::all_reduce(local_connection_child_by_parent, comm);
+      const auto connection_first_equation_by_parent =
+          Core::Communication::all_reduce(local_connection_first_equation_by_parent, comm);
+      const auto connection_owner_by_parent =
+          Core::Communication::all_reduce(local_connection_owner_by_parent, comm);
+      const auto bifurcation_child_1_by_parent =
+          Core::Communication::all_reduce(local_bifurcation_child_1_by_parent, comm);
+      const auto bifurcation_child_2_by_parent =
+          Core::Communication::all_reduce(local_bifurcation_child_2_by_parent, comm);
+      const auto bifurcation_first_equation_by_parent =
+          Core::Communication::all_reduce(local_bifurcation_first_equation_by_parent, comm);
+      const auto bifurcation_owner_by_parent =
+          Core::Communication::all_reduce(local_bifurcation_owner_by_parent, comm);
+
       std::map<int, TreeJunctionKind> junction_kind;
-      add_connection_metadata(metadata, connections, junction_kind);
-      add_bifurcation_metadata(metadata, bifurcations, junction_kind);
+      add_connection_metadata(metadata, connection_child_by_parent,
+          connection_first_equation_by_parent, connection_owner_by_parent, row_map,
+          locally_relevant_dof_map, junction_kind);
+      add_bifurcation_metadata(metadata, bifurcation_child_1_by_parent,
+          bifurcation_child_2_by_parent, bifurcation_first_equation_by_parent,
+          bifurcation_owner_by_parent, row_map, locally_relevant_dof_map, junction_kind);
       validate_junction_coverage(metadata, junction_kind);
     }
 
@@ -431,33 +520,71 @@ namespace ReducedLung
     }
 
     void build_boundary_condition_metadata(ReducedLungTreeMetadata& metadata,
-        const BoundaryConditions::BoundaryConditionContainer& boundary_conditions)
+        const BoundaryConditions::BoundaryConditionContainer& boundary_conditions,
+        const Core::LinAlg::Map& row_map, const Core::LinAlg::Map& locally_relevant_dof_map)
     {
+      const MPI_Comm comm = row_map.get_comm();
+      const int owner_rank = Core::Communication::my_mpi_rank(comm);
+
+      std::map<int, int> local_type_by_equation;
+      std::map<int, int> local_node_by_equation;
+      std::map<int, int> local_element_by_equation;
+      std::map<int, int> local_dof_by_equation;
+      std::map<int, int> local_owner_by_equation;
       for (const auto& model : boundary_conditions.models)
       {
         const auto& data = model.data;
         for (std::size_t i = 0; i < data.size(); ++i)
         {
-          const int element_index_value = element_index(metadata, data.global_element_id[i]);
-          const auto& element = metadata.elements[static_cast<std::size_t>(element_index_value)];
-          const TreeBoundarySide side = determine_boundary_side(element, data.node_id[i]);
-          const int expected_dof_id = expected_boundary_dof_id(element, side, model.type);
-          FOUR_C_ASSERT_ALWAYS(data.global_dof_id[i] == expected_dof_id,
-              "Boundary condition {} constrains global dof {}, but element {} side expects dof {}.",
-              data.input_bc_id[i] + 1, data.global_dof_id[i], element.global_element_id + 1,
-              expected_dof_id);
-
-          metadata.boundary_conditions.push_back(TreeBoundaryConditionMetadata{
-              .type = model.type,
-              .side = side,
-              .node_id = data.node_id[i],
-              .element_index = element_index_value,
-              .local_equation_id = data.local_equation_id[i],
-              .global_equation_id = data.global_equation_id[i],
-              .global_dof_id = data.global_dof_id[i],
-              .local_dof_id = data.local_dof_id[i],
-          });
+          const int global_equation_id = data.global_equation_id[i];
+          local_type_by_equation[global_equation_id] = static_cast<int>(model.type);
+          local_node_by_equation[global_equation_id] = data.node_id[i];
+          local_element_by_equation[global_equation_id] = data.global_element_id[i];
+          local_dof_by_equation[global_equation_id] = data.global_dof_id[i];
+          local_owner_by_equation[global_equation_id] = owner_rank;
         }
+      }
+
+      const auto type_by_equation = Core::Communication::all_reduce(local_type_by_equation, comm);
+      const auto node_by_equation = Core::Communication::all_reduce(local_node_by_equation, comm);
+      const auto element_by_equation =
+          Core::Communication::all_reduce(local_element_by_equation, comm);
+      const auto dof_by_equation = Core::Communication::all_reduce(local_dof_by_equation, comm);
+      const auto owner_by_equation = Core::Communication::all_reduce(local_owner_by_equation, comm);
+
+      for (const auto& [global_equation_id, element_global_id] : element_by_equation)
+      {
+        const auto type_it = type_by_equation.find(global_equation_id);
+        const auto node_it = node_by_equation.find(global_equation_id);
+        const auto dof_it = dof_by_equation.find(global_equation_id);
+        const auto owner_it = owner_by_equation.find(global_equation_id);
+        FOUR_C_ASSERT_ALWAYS(
+            type_it != type_by_equation.end() && node_it != node_by_equation.end() &&
+                dof_it != dof_by_equation.end() && owner_it != owner_by_equation.end(),
+            "Incomplete distributed boundary-condition metadata for equation {}.",
+            global_equation_id);
+
+        const int element_index_value = element_index(metadata, element_global_id);
+        const auto& element = metadata.elements[static_cast<std::size_t>(element_index_value)];
+        const auto boundary_type = static_cast<BoundaryConditions::Type>(type_it->second);
+        const TreeBoundarySide side = determine_boundary_side(element, node_it->second);
+        const int expected_dof_id = expected_boundary_dof_id(element, side, boundary_type);
+        FOUR_C_ASSERT_ALWAYS(dof_it->second == expected_dof_id,
+            "Boundary condition at equation {} constrains global dof {}, but element {} side "
+            "expects dof {}.",
+            global_equation_id, dof_it->second, element.global_element_id + 1, expected_dof_id);
+
+        metadata.boundary_conditions.push_back(TreeBoundaryConditionMetadata{
+            .type = boundary_type,
+            .side = side,
+            .node_id = node_it->second,
+            .element_index = element_index_value,
+            .local_equation_id = row_map.lid(global_equation_id),
+            .global_equation_id = global_equation_id,
+            .global_dof_id = dof_it->second,
+            .local_dof_id = locally_relevant_dof_map.lid(dof_it->second),
+            .owner_rank = owner_it->second,
+        });
       }
     }
 
@@ -501,8 +628,24 @@ namespace ReducedLung
     FOUR_C_ASSERT_ALWAYS(topology.num_elements > 0,
         "Reduced-lung tree metadata requires at least one topology element.");
 
-    const auto equation_metadata =
+    const MPI_Comm comm = context.row_map.get_comm();
+    const auto local_equation_metadata =
         collect_element_equation_metadata(context.airways, context.terminal_units, context.row_map);
+    std::map<int, int> local_first_global_state_equation;
+    std::map<int, int> local_num_state_equations;
+    std::map<int, int> local_element_owner;
+    for (const auto& [global_element_id, metadata_entry] : local_equation_metadata)
+    {
+      local_first_global_state_equation[global_element_id] =
+          metadata_entry.first_global_equation_id;
+      local_num_state_equations[global_element_id] = metadata_entry.num_equations;
+      local_element_owner[global_element_id] = metadata_entry.owner_rank;
+    }
+    const auto first_global_state_equation =
+        Core::Communication::all_reduce(local_first_global_state_equation, comm);
+    const auto num_state_equations =
+        Core::Communication::all_reduce(local_num_state_equations, comm);
+    const auto element_owner = Core::Communication::all_reduce(local_element_owner, comm);
 
     metadata.elements.reserve(static_cast<std::size_t>(topology.num_elements));
     for (int global_element_id = 0; global_element_id < topology.num_elements; ++global_element_id)
@@ -530,8 +673,12 @@ namespace ReducedLung
           "Reduced-lung element {} has unsupported dof count {}.", global_element_id + 1,
           dof_count_it->second);
 
-      const auto equation_it = equation_metadata.find(global_element_id);
-      FOUR_C_ASSERT_ALWAYS(equation_it != equation_metadata.end(),
+      const auto first_global_equation_it = first_global_state_equation.find(global_element_id);
+      const auto num_state_equations_it = num_state_equations.find(global_element_id);
+      const auto element_owner_it = element_owner.find(global_element_id);
+      FOUR_C_ASSERT_ALWAYS(first_global_equation_it != first_global_state_equation.end() &&
+                               num_state_equations_it != num_state_equations.end() &&
+                               element_owner_it != element_owner.end(),
           "Missing model equation metadata for reduced-lung element {}.", global_element_id + 1);
 
       const auto global_dof_ids = consecutive_ids(first_dof_it->second, dof_count_it->second);
@@ -549,9 +696,10 @@ namespace ReducedLung
           .global_dof_ids = global_dof_ids,
           .local_dof_ids =
               local_ids_for_global_ids(context.locally_relevant_dof_map, global_dof_ids),
-          .first_local_state_equation_id = equation_it->second.first_local_equation_id,
-          .first_global_state_equation_id = equation_it->second.first_global_equation_id,
-          .num_state_equations = equation_it->second.num_equations,
+          .first_local_state_equation_id = context.row_map.lid(first_global_equation_it->second),
+          .first_global_state_equation_id = first_global_equation_it->second,
+          .num_state_equations = num_state_equations_it->second,
+          .owner_rank = element_owner_it->second,
       };
 
       if (element.kind == TreeElementKind::Airway)
@@ -582,8 +730,10 @@ namespace ReducedLung
         metadata.num_global_equations, metadata.num_global_dofs);
 
     build_tree_relations(metadata);
-    build_junction_metadata(metadata, context.connections, context.bifurcations);
-    build_boundary_condition_metadata(metadata, context.boundary_conditions);
+    build_junction_metadata(metadata, context.connections, context.bifurcations, context.row_map,
+        context.locally_relevant_dof_map);
+    build_boundary_condition_metadata(
+        metadata, context.boundary_conditions, context.row_map, context.locally_relevant_dof_map);
     validate_boundary_closure(metadata);
     build_layers(metadata);
 

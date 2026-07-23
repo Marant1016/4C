@@ -70,6 +70,14 @@ namespace ReducedLung
     }
     return entry->second;
   }
+
+  const std::vector<std::pair<int, double>>& TreeLinearization::entries(int local_row_id) const
+  {
+    FOUR_C_ASSERT_ALWAYS(local_row_id >= 0 && local_row_id < num_rows_,
+        "Tree linearization row {} is outside [0, {}).", local_row_id, num_rows_);
+
+    return rows_[static_cast<std::size_t>(local_row_id)];
+  }
 }  // namespace ReducedLung
 
 FOUR_C_NAMESPACE_CLOSE

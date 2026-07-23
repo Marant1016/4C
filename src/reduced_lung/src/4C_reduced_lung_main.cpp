@@ -302,9 +302,6 @@ namespace ReducedLung
       {
         int comm_size = 1;
         MPI_Comm_size(comm_, &comm_size);
-        FOUR_C_ASSERT_ALWAYS(comm_size == 1,
-            "Reduced lung NewtonTree nonlinear solver workflow currently supports only serial "
-            "runs.");
         FOUR_C_ASSERT_ALWAYS(row_map_ != nullptr && locally_relevant_dof_map_ != nullptr,
             "Reduced lung maps must be initialized before tree Newton solver setup.");
 
@@ -320,10 +317,19 @@ namespace ReducedLung
             .row_map = *row_map_,
             .locally_relevant_dof_map = *locally_relevant_dof_map_,
         });
-        newton_linear_solver_ = std::make_shared<TreeNewtonLinearSolver>(
-            TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_,
-                .coefficient_source =
-                    TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks});
+        if (comm_size == 1)
+        {
+          newton_linear_solver_ = std::make_shared<TreeNewtonLinearSolver>(
+              TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_,
+                  .coefficient_source =
+                      TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks});
+        }
+        else
+        {
+          newton_linear_solver_ = std::make_shared<DistributedTreeNewtonLinearSolver>(
+              DistributedTreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_,
+                  .locally_relevant_dof_map = *locally_relevant_dof_map_});
+        }
         build_newton_solver();
       }
 

@@ -71,6 +71,7 @@ namespace ReducedLung
     int first_local_state_equation_id = -1;
     int first_global_state_equation_id = -1;
     int num_state_equations = 0;
+    int owner_rank = -1;
 
     [[nodiscard]] bool is_leaf() const { return child_count == 0; }
   };
@@ -88,6 +89,7 @@ namespace ReducedLung
     int first_local_equation_id = -1;
     int first_global_equation_id = -1;
     int num_equations = 0;
+    int owner_rank = -1;
 
     std::vector<int> global_dof_ids;
     std::vector<int> local_dof_ids;
@@ -109,6 +111,7 @@ namespace ReducedLung
 
     int global_dof_id = -1;
     int local_dof_id = -1;
+    int owner_rank = -1;
   };
 
   /**
