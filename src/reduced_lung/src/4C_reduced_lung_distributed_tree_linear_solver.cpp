@@ -23,8 +23,8 @@
 #include <cstdint>
 #include <limits>
 #include <numeric>
+#include <span>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 FOUR_C_NAMESPACE_OPEN
@@ -34,6 +34,19 @@ namespace ReducedLung
   namespace
   {
     using Clock = std::chrono::steady_clock;
+
+    struct RelationMessage
+    {
+      int element_index = -1;
+      double G = 0.0;
+      double h = 0.0;
+    };
+
+    struct ScalarMessage
+    {
+      int id = -1;
+      double value = 0.0;
+    };
 
     double elapsed_seconds(const Clock::time_point start)
     {
@@ -50,140 +63,185 @@ namespace ReducedLung
       return displacements;
     }
 
-    std::vector<int> all_gather_counts(int local_count, MPI_Comm comm)
+    std::vector<int> doubled_counts(const std::vector<int>& counts)
     {
-      int comm_size = 1;
-      MPI_Comm_size(comm, &comm_size);
-      std::vector<int> counts(static_cast<std::size_t>(comm_size), 0);
-      MPI_Allgather(&local_count, 1, MPI_INT, counts.data(), 1, MPI_INT, comm);
-      return counts;
+      std::vector<int> doubled(counts.size(), 0);
+      std::transform(
+          counts.begin(), counts.end(), doubled.begin(), [](const int count) { return 2 * count; });
+      return doubled;
     }
 
-    std::vector<int> all_gatherv_int(
-        const std::vector<int>& local_values, const std::vector<int>& counts, MPI_Comm comm)
+    std::vector<int> all_to_all_counts(const std::vector<int>& send_counts, MPI_Comm comm)
     {
-      const auto displacements = displacements_from_counts(counts);
-      const int total_count = std::accumulate(counts.begin(), counts.end(), 0);
-      std::vector<int> global_values(static_cast<std::size_t>(total_count), 0);
-      MPI_Allgatherv(local_values.empty() ? nullptr : local_values.data(),
-          static_cast<int>(local_values.size()), MPI_INT, global_values.data(), counts.data(),
-          displacements.data(), MPI_INT, comm);
-      return global_values;
+      std::vector<int> recv_counts(send_counts.size(), 0);
+      MPI_Alltoall(send_counts.data(), 1, MPI_INT, recv_counts.data(), 1, MPI_INT, comm);
+      return recv_counts;
     }
 
-    std::vector<double> all_gatherv_double(
-        const std::vector<double>& local_values, const std::vector<int>& counts, MPI_Comm comm)
+    [[nodiscard]] int total_count(const std::vector<int>& counts)
     {
-      const auto displacements = displacements_from_counts(counts);
-      const int total_count = std::accumulate(counts.begin(), counts.end(), 0);
-      std::vector<double> global_values(static_cast<std::size_t>(total_count), 0.0);
-      MPI_Allgatherv(local_values.empty() ? nullptr : local_values.data(),
-          static_cast<int>(local_values.size()), MPI_DOUBLE, global_values.data(), counts.data(),
-          displacements.data(), MPI_DOUBLE, comm);
-      return global_values;
+      return std::accumulate(counts.begin(), counts.end(), 0);
     }
 
-    std::vector<double> gather_global_residual(
-        const Core::LinAlg::Vector<double>& residual, int num_global_equations, MPI_Comm comm)
+    std::vector<RelationMessage> exchange_relation_messages(
+        const std::vector<std::vector<RelationMessage>>& send_messages_by_rank, MPI_Comm comm)
     {
-      std::vector<double> global_residual(static_cast<std::size_t>(num_global_equations), 0.0);
-      const auto values = residual.local_values_as_span();
-      const auto& row_map = residual.get_map();
-      for (int local_row = 0; local_row < residual.local_length(); ++local_row)
+      const int comm_size = static_cast<int>(send_messages_by_rank.size());
+      std::vector<int> send_counts(static_cast<std::size_t>(comm_size), 0);
+      for (int rank = 0; rank < comm_size; ++rank)
       {
-        const int global_row = row_map.gid(local_row);
-        FOUR_C_ASSERT_ALWAYS(global_row >= 0 && global_row < num_global_equations,
-            "DistributedTreeNewtonLinearSolver residual row {} is outside [0, {}).", global_row,
-            num_global_equations);
-        global_residual[static_cast<std::size_t>(global_row)] =
-            values[static_cast<std::size_t>(local_row)];
+        send_counts[static_cast<std::size_t>(rank)] =
+            static_cast<int>(send_messages_by_rank[static_cast<std::size_t>(rank)].size());
       }
-      MPI_Allreduce(
-          MPI_IN_PLACE, global_residual.data(), num_global_equations, MPI_DOUBLE, MPI_SUM, comm);
-      return global_residual;
-    }
+      const auto recv_counts = all_to_all_counts(send_counts, comm);
+      const auto send_displacements = displacements_from_counts(send_counts);
+      const auto recv_displacements = displacements_from_counts(recv_counts);
+      const int send_count = total_count(send_counts);
+      const int recv_count = total_count(recv_counts);
 
-    struct GatheredCoefficients
-    {
-      std::vector<int> rows;
-      std::vector<int> columns;
-      std::vector<double> values;
-    };
-
-    GatheredCoefficients gather_global_coefficients(const TreeLinearization& linearization,
-        const Core::LinAlg::Map& row_map, const Core::LinAlg::Map& locally_relevant_dof_map,
-        MPI_Comm comm)
-    {
-      std::vector<int> local_rows;
-      std::vector<int> local_columns;
-      std::vector<double> local_values;
-
-      for (int local_row = 0; local_row < linearization.num_rows(); ++local_row)
+      std::vector<int> send_ids(static_cast<std::size_t>(send_count), -1);
+      std::vector<double> send_values(static_cast<std::size_t>(2 * send_count), 0.0);
+      for (int rank = 0; rank < comm_size; ++rank)
       {
-        const int global_row = row_map.gid(local_row);
-        FOUR_C_ASSERT_ALWAYS(global_row >= 0,
-            "DistributedTreeNewtonLinearSolver found invalid local row {} in tree linearization.",
-            local_row);
-        for (const auto& [local_column, value] : linearization.entries(local_row))
+        int offset = send_displacements[static_cast<std::size_t>(rank)];
+        for (const auto& message : send_messages_by_rank[static_cast<std::size_t>(rank)])
         {
-          const int global_column = locally_relevant_dof_map.gid(local_column);
-          FOUR_C_ASSERT_ALWAYS(global_column >= 0,
-              "DistributedTreeNewtonLinearSolver found invalid local dof {} in tree linearization.",
-              local_column);
-          local_rows.push_back(global_row);
-          local_columns.push_back(global_column);
-          local_values.push_back(value);
+          send_ids[static_cast<std::size_t>(offset)] = message.element_index;
+          send_values[static_cast<std::size_t>(2 * offset)] = message.G;
+          send_values[static_cast<std::size_t>(2 * offset + 1)] = message.h;
+          ++offset;
         }
       }
 
-      const auto counts = all_gather_counts(static_cast<int>(local_values.size()), comm);
-      return GatheredCoefficients{.rows = all_gatherv_int(local_rows, counts, comm),
-          .columns = all_gatherv_int(local_columns, counts, comm),
-          .values = all_gatherv_double(local_values, counts, comm)};
+      std::vector<int> recv_ids(static_cast<std::size_t>(recv_count), -1);
+      std::vector<double> recv_values(static_cast<std::size_t>(2 * recv_count), 0.0);
+      MPI_Alltoallv(send_ids.empty() ? nullptr : send_ids.data(), send_counts.data(),
+          send_displacements.data(), MPI_INT, recv_ids.empty() ? nullptr : recv_ids.data(),
+          recv_counts.data(), recv_displacements.data(), MPI_INT, comm);
+
+      const auto send_double_counts = doubled_counts(send_counts);
+      const auto recv_double_counts = doubled_counts(recv_counts);
+      const auto send_double_displacements = displacements_from_counts(send_double_counts);
+      const auto recv_double_displacements = displacements_from_counts(recv_double_counts);
+      MPI_Alltoallv(send_values.empty() ? nullptr : send_values.data(), send_double_counts.data(),
+          send_double_displacements.data(), MPI_DOUBLE,
+          recv_values.empty() ? nullptr : recv_values.data(), recv_double_counts.data(),
+          recv_double_displacements.data(), MPI_DOUBLE, comm);
+
+      std::vector<RelationMessage> recv_messages;
+      recv_messages.reserve(static_cast<std::size_t>(recv_count));
+      for (int i = 0; i < recv_count; ++i)
+      {
+        recv_messages.push_back(
+            RelationMessage{.element_index = recv_ids[static_cast<std::size_t>(i)],
+                .G = recv_values[static_cast<std::size_t>(2 * i)],
+                .h = recv_values[static_cast<std::size_t>(2 * i + 1)]});
+      }
+      return recv_messages;
     }
 
-    class GlobalTreeCoefficientProvider
+    std::vector<ScalarMessage> exchange_scalar_messages(
+        const std::vector<std::vector<ScalarMessage>>& send_messages_by_rank, MPI_Comm comm)
+    {
+      const int comm_size = static_cast<int>(send_messages_by_rank.size());
+      std::vector<int> send_counts(static_cast<std::size_t>(comm_size), 0);
+      for (int rank = 0; rank < comm_size; ++rank)
+      {
+        send_counts[static_cast<std::size_t>(rank)] =
+            static_cast<int>(send_messages_by_rank[static_cast<std::size_t>(rank)].size());
+      }
+      const auto recv_counts = all_to_all_counts(send_counts, comm);
+      const auto send_displacements = displacements_from_counts(send_counts);
+      const auto recv_displacements = displacements_from_counts(recv_counts);
+      const int send_count = total_count(send_counts);
+      const int recv_count = total_count(recv_counts);
+
+      std::vector<int> send_ids(static_cast<std::size_t>(send_count), -1);
+      std::vector<double> send_values(static_cast<std::size_t>(send_count), 0.0);
+      for (int rank = 0; rank < comm_size; ++rank)
+      {
+        int offset = send_displacements[static_cast<std::size_t>(rank)];
+        for (const auto& message : send_messages_by_rank[static_cast<std::size_t>(rank)])
+        {
+          send_ids[static_cast<std::size_t>(offset)] = message.id;
+          send_values[static_cast<std::size_t>(offset)] = message.value;
+          ++offset;
+        }
+      }
+
+      std::vector<int> recv_ids(static_cast<std::size_t>(recv_count), -1);
+      std::vector<double> recv_values(static_cast<std::size_t>(recv_count), 0.0);
+      MPI_Alltoallv(send_ids.empty() ? nullptr : send_ids.data(), send_counts.data(),
+          send_displacements.data(), MPI_INT, recv_ids.empty() ? nullptr : recv_ids.data(),
+          recv_counts.data(), recv_displacements.data(), MPI_INT, comm);
+      MPI_Alltoallv(send_values.empty() ? nullptr : send_values.data(), send_counts.data(),
+          send_displacements.data(), MPI_DOUBLE, recv_values.empty() ? nullptr : recv_values.data(),
+          recv_counts.data(), recv_displacements.data(), MPI_DOUBLE, comm);
+
+      std::vector<ScalarMessage> recv_messages;
+      recv_messages.reserve(static_cast<std::size_t>(recv_count));
+      for (int i = 0; i < recv_count; ++i)
+      {
+        recv_messages.push_back(ScalarMessage{.id = recv_ids[static_cast<std::size_t>(i)],
+            .value = recv_values[static_cast<std::size_t>(i)]});
+      }
+      return recv_messages;
+    }
+
+    [[nodiscard]] std::uint64_t count_messages(
+        const std::vector<std::vector<RelationMessage>>& messages_by_rank)
+    {
+      std::uint64_t count = 0;
+      for (const auto& messages : messages_by_rank) count += messages.size();
+      return count;
+    }
+
+    [[nodiscard]] std::uint64_t count_messages(
+        const std::vector<std::vector<ScalarMessage>>& messages_by_rank)
+    {
+      std::uint64_t count = 0;
+      for (const auto& messages : messages_by_rank) count += messages.size();
+      return count;
+    }
+
+    class LocalTreeCoefficientProvider
     {
      public:
-      GlobalTreeCoefficientProvider(int num_global_dofs, const GatheredCoefficients& coefficients,
+      LocalTreeCoefficientProvider(const TreeLinearization& linearization,
+          const Core::LinAlg::Map& row_map, const Core::LinAlg::Map& locally_relevant_dof_map,
           TreeNewtonLinearSolverProfile* profile)
-          : num_global_dofs_(num_global_dofs), profile_(profile)
+          : linearization_(linearization),
+            row_map_(row_map),
+            locally_relevant_dof_map_(locally_relevant_dof_map),
+            profile_(profile)
       {
-        FOUR_C_ASSERT_ALWAYS(coefficients.rows.size() == coefficients.columns.size() &&
-                                 coefficients.rows.size() == coefficients.values.size(),
-            "DistributedTreeNewtonLinearSolver gathered inconsistent coefficient arrays.");
-        values_.reserve(coefficients.values.size());
-        for (std::size_t i = 0; i < coefficients.values.size(); ++i)
-        {
-          values_[key(coefficients.rows[i], coefficients.columns[i])] = coefficients.values[i];
-        }
       }
 
       [[nodiscard]] double value(int global_row, int global_column, double tolerance) const
       {
         (void)tolerance;
         const auto lookup_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
-        const auto entry = values_.find(key(global_row, global_column));
+        const int local_row = row_map_.lid(global_row);
+        const int local_column = locally_relevant_dof_map_.lid(global_column);
+        FOUR_C_ASSERT_ALWAYS(local_row >= 0,
+            "DistributedTreeNewtonLinearSolver rank-local solve needs row {} locally.", global_row);
+        FOUR_C_ASSERT_ALWAYS(local_column >= 0,
+            "DistributedTreeNewtonLinearSolver rank-local solve needs dof {} locally.",
+            global_column);
+        const double coefficient = linearization_.value(local_row, local_column);
         if (profile_ != nullptr)
         {
           profile_->coefficient_lookup_time += elapsed_seconds(lookup_start);
           ++profile_->coefficient_lookup_count;
         }
-        return entry == values_.end() ? 0.0 : entry->second;
+        return coefficient;
       }
 
      private:
-      [[nodiscard]] std::int64_t key(int global_row, int global_column) const
-      {
-        FOUR_C_ASSERT_ALWAYS(global_row >= 0 && global_column >= 0,
-            "DistributedTreeNewtonLinearSolver coefficient ids must be non-negative.");
-        return static_cast<std::int64_t>(global_row) * static_cast<std::int64_t>(num_global_dofs_) +
-               static_cast<std::int64_t>(global_column);
-      }
-
-      int num_global_dofs_ = 0;
+      const TreeLinearization& linearization_;
+      const Core::LinAlg::Map& row_map_;
+      const Core::LinAlg::Map& locally_relevant_dof_map_;
       TreeNewtonLinearSolverProfile* profile_ = nullptr;
-      std::unordered_map<std::int64_t, double> values_;
     };
 
     const TreeJunctionMetadata* find_junction_for_parent(
@@ -232,14 +290,16 @@ namespace ReducedLung
       return *root_boundary;
     }
 
-    double rhs_value(const std::vector<double>& global_residual, int global_row)
+    double rhs_value(const Core::LinAlg::Vector<double>& residual, int global_row)
     {
-      FOUR_C_ASSERT_ALWAYS(global_row >= 0 && global_row < static_cast<int>(global_residual.size()),
-          "DistributedTreeNewtonLinearSolver row {} is not globally available.", global_row);
-      return -global_residual[static_cast<std::size_t>(global_row)];
+      const int local_row = residual.get_map().lid(global_row);
+      FOUR_C_ASSERT_ALWAYS(local_row >= 0,
+          "DistributedTreeNewtonLinearSolver rank-local solve needs residual row {} locally.",
+          global_row);
+      return -residual.local_values_as_span()[static_cast<std::size_t>(local_row)];
     }
 
-    double required_matrix_value(const GlobalTreeCoefficientProvider& coefficients, int global_row,
+    double required_matrix_value(const LocalTreeCoefficientProvider& coefficients, int global_row,
         int global_column, double tolerance, const std::string& context)
     {
       const double value = coefficients.value(global_row, global_column, tolerance);
@@ -347,12 +407,39 @@ namespace ReducedLung
       return static_cast<int>(std::distance(unknown_global_dof_ids.begin(), it));
     }
 
-    void set_local_delta_value(Core::LinAlg::Vector<double>& delta, int global_dof_id, double value)
+    std::vector<int> correction_owner_by_global_dof(
+        const Core::LinAlg::Map& correction_map, int num_global_dofs)
     {
-      if (delta.get_map().lid(global_dof_id) >= 0)
+      std::vector<int> global_dof_ids(static_cast<std::size_t>(num_global_dofs), -1);
+      std::iota(global_dof_ids.begin(), global_dof_ids.end(), 0);
+      std::vector<int> owner_ranks(static_cast<std::size_t>(num_global_dofs), -1);
+      std::vector<int> local_ids(static_cast<std::size_t>(num_global_dofs), -1);
+      const int error = correction_map.remote_id_list(std::span<const int>(global_dof_ids),
+          std::span<int>(owner_ranks), std::span<int>(local_ids));
+      FOUR_C_ASSERT_ALWAYS(
+          error >= 0, "DistributedTreeNewtonLinearSolver failed to query correction owners.");
+      return owner_ranks;
+    }
+
+    void queue_or_set_delta(Core::LinAlg::Vector<double>& delta,
+        const std::vector<int>& correction_owner_by_dof,
+        std::vector<std::vector<ScalarMessage>>& correction_messages_by_rank, int my_rank,
+        int global_dof_id, double value)
+    {
+      FOUR_C_ASSERT_ALWAYS(
+          global_dof_id >= 0 && global_dof_id < static_cast<int>(correction_owner_by_dof.size()),
+          "DistributedTreeNewtonLinearSolver correction dof {} is outside owner table.",
+          global_dof_id);
+      const int owner_rank = correction_owner_by_dof[static_cast<std::size_t>(global_dof_id)];
+      FOUR_C_ASSERT_ALWAYS(owner_rank >= 0,
+          "DistributedTreeNewtonLinearSolver found no owner for correction dof {}.", global_dof_id);
+      if (owner_rank == my_rank)
       {
         delta.replace_global_value(global_dof_id, value);
+        return;
       }
+      correction_messages_by_rank[static_cast<std::size_t>(owner_rank)].push_back(
+          ScalarMessage{.id = global_dof_id, .value = value});
     }
   }  // namespace
 
@@ -372,6 +459,9 @@ namespace ReducedLung
 
   void DistributedTreeNewtonLinearSolver::build_symbolic_plan()
   {
+    int my_rank = 0;
+    MPI_Comm_rank(comm_, &my_rank);
+
     const auto& root_element =
         tree_metadata_.elements[static_cast<std::size_t>(tree_metadata_.root_element_index)];
     const auto& root_boundary = root_inlet_boundary(tree_metadata_);
@@ -468,7 +558,7 @@ namespace ReducedLung
 
       auto& workspace = element_workspaces_[element_index];
       const std::size_t block_size = plan.unknown_global_dof_ids.size();
-      if (profile_ != nullptr)
+      if (profile_ != nullptr && element.owner_rank == my_rank)
       {
         ++profile_->element_count;
         profile_->total_local_block_dofs += block_size;
@@ -505,6 +595,11 @@ namespace ReducedLung
     (void)metadata;
     const auto solve_start = Clock::now();
 
+    int my_rank = 0;
+    int comm_size = 1;
+    MPI_Comm_rank(comm_, &my_rank);
+    MPI_Comm_size(comm_, &comm_size);
+
     FOUR_C_ASSERT_ALWAYS(tree_linearization_ != nullptr,
         "DistributedTreeNewtonLinearSolver requires a structured tree linearization before "
         "solving.");
@@ -522,30 +617,20 @@ namespace ReducedLung
 
     delta.put_scalar(0.0);
 
-    const auto communication_start = Clock::now();
-    const auto global_residual =
-        gather_global_residual(residual, tree_metadata_.num_global_equations, comm_);
-    const auto gathered_coefficients = gather_global_coefficients(
-        *tree_linearization_, residual.get_map(), locally_relevant_dof_map_, comm_);
-    if (profile_ != nullptr)
-    {
-      profile_->communication_time += elapsed_seconds(communication_start);
-      profile_->communicated_residual_count += static_cast<std::uint64_t>(residual.local_length());
-      profile_->communicated_coefficient_count +=
-          static_cast<std::uint64_t>(gathered_coefficients.values.size());
-      profile_->communication_bytes += static_cast<std::uint64_t>(
-          global_residual.size() * sizeof(double) +
-          gathered_coefficients.values.size() * (2 * sizeof(int) + sizeof(double)));
-    }
-    const GlobalTreeCoefficientProvider coefficients(
-        tree_metadata_.num_global_dofs, gathered_coefficients, profile_);
+    const LocalTreeCoefficientProvider coefficients(
+        *tree_linearization_, residual.get_map(), locally_relevant_dof_map_, profile_);
+    const auto correction_owners =
+        correction_owner_by_global_dof(delta.get_map(), tree_metadata_.num_global_dofs);
+    std::vector<bool> subtree_relation_available(tree_metadata_.elements.size(), false);
+    std::vector<std::vector<ScalarMessage>> correction_messages_by_rank(
+        static_cast<std::size_t>(comm_size));
 
     const auto add_equation_row = [&](const ElementSolvePlan& plan, ElementWorkspace& workspace,
                                       int equation_index, int global_row, double rhs_shift)
     {
       auto& matrix_row = workspace.matrix[static_cast<std::size_t>(equation_index)];
       workspace.rhs_constant[static_cast<std::size_t>(equation_index)] =
-          rhs_value(global_residual, global_row) - rhs_shift;
+          rhs_value(residual, global_row) - rhs_shift;
       workspace.rhs_inlet_pressure[static_cast<std::size_t>(equation_index)] =
           -coefficients.value(global_row, plan.inlet_pressure_global_dof, pivot_tolerance_);
 
@@ -561,8 +646,16 @@ namespace ReducedLung
     const auto bottom_up_start = Clock::now();
     for (const auto& layer : tree_metadata_.bottom_up_layers)
     {
+      std::vector<std::vector<RelationMessage>> relation_messages_by_rank(
+          static_cast<std::size_t>(comm_size));
       for (const int element_index : layer)
       {
+        const auto& element = tree_metadata_.elements[static_cast<std::size_t>(element_index)];
+        if (element.owner_rank != my_rank)
+        {
+          continue;
+        }
+
         const auto& plan = element_plans_[static_cast<std::size_t>(element_index)];
         auto& workspace = element_workspaces_[static_cast<std::size_t>(element_index)];
 
@@ -585,6 +678,14 @@ namespace ReducedLung
               child_interface_index < plan.child_interfaces.size(); ++child_interface_index)
           {
             const auto& child_interface = plan.child_interfaces[child_interface_index];
+            FOUR_C_ASSERT_ALWAYS(subtree_relation_available[static_cast<std::size_t>(
+                                     child_interface.child_element_index)],
+                "DistributedTreeNewtonLinearSolver missing condensed relation for child element "
+                "{}.",
+                tree_metadata_
+                        .elements[static_cast<std::size_t>(child_interface.child_element_index)]
+                        .global_element_id +
+                    1);
             const auto& child_relation =
                 subtree_relations_[static_cast<std::size_t>(child_interface.child_element_index)];
 
@@ -596,8 +697,7 @@ namespace ReducedLung
                 required_matrix_value(coefficients, child_interface.pressure_global_row,
                     child_interface.child_inlet_pressure_global_dof, pivot_tolerance_,
                     "pressure-continuity child pressure");
-            const double pressure_rhs =
-                rhs_value(global_residual, child_interface.pressure_global_row);
+            const double pressure_rhs = rhs_value(residual, child_interface.pressure_global_row);
 
             const double child_pressure_slope = -pressure_parent_coeff / pressure_child_coeff;
             const double child_pressure_intercept = pressure_rhs / pressure_child_coeff;
@@ -634,6 +734,41 @@ namespace ReducedLung
             .G = workspace.slope[static_cast<std::size_t>(plan.inlet_flow_unknown_index)],
             .h = workspace.intercept[static_cast<std::size_t>(plan.inlet_flow_unknown_index)],
         };
+        subtree_relation_available[static_cast<std::size_t>(element_index)] = true;
+
+        if (element.parent_element_index != -1)
+        {
+          const auto& parent =
+              tree_metadata_.elements[static_cast<std::size_t>(element.parent_element_index)];
+          if (parent.owner_rank != my_rank)
+          {
+            relation_messages_by_rank[static_cast<std::size_t>(parent.owner_rank)].push_back(
+                RelationMessage{.element_index = element_index,
+                    .G = subtree_relations_[static_cast<std::size_t>(element_index)].G,
+                    .h = subtree_relations_[static_cast<std::size_t>(element_index)].h});
+          }
+        }
+      }
+
+      const auto communication_start = Clock::now();
+      const auto received_relations = exchange_relation_messages(relation_messages_by_rank, comm_);
+      if (profile_ != nullptr)
+      {
+        profile_->communication_time += elapsed_seconds(communication_start);
+        profile_->boundary_relation_message_count += count_messages(relation_messages_by_rank);
+        profile_->communication_bytes +=
+            count_messages(relation_messages_by_rank) * (sizeof(int) + 2 * sizeof(double));
+      }
+      for (const auto& relation : received_relations)
+      {
+        FOUR_C_ASSERT_ALWAYS(
+            relation.element_index >= 0 &&
+                relation.element_index < static_cast<int>(tree_metadata_.elements.size()),
+            "DistributedTreeNewtonLinearSolver received invalid relation element index {}.",
+            relation.element_index);
+        subtree_relations_[static_cast<std::size_t>(relation.element_index)] =
+            SubtreeRelation{.G = relation.G, .h = relation.h};
+        subtree_relation_available[static_cast<std::size_t>(relation.element_index)] = true;
       }
     }
     if (profile_ != nullptr)
@@ -643,31 +778,45 @@ namespace ReducedLung
 
     std::fill(inlet_pressure_by_element_.begin(), inlet_pressure_by_element_.end(),
         std::numeric_limits<double>::quiet_NaN());
-    const double root_boundary_coeff =
-        required_matrix_value(coefficients, root_boundary_global_row_,
-            root_inlet_pressure_global_dof_, pivot_tolerance_, "root inlet boundary");
-    inlet_pressure_by_element_[static_cast<std::size_t>(tree_metadata_.root_element_index)] =
-        rhs_value(global_residual, root_boundary_global_row_) / root_boundary_coeff;
+    const auto& root_element =
+        tree_metadata_.elements[static_cast<std::size_t>(tree_metadata_.root_element_index)];
+    if (root_element.owner_rank == my_rank)
+    {
+      const double root_boundary_coeff =
+          required_matrix_value(coefficients, root_boundary_global_row_,
+              root_inlet_pressure_global_dof_, pivot_tolerance_, "root inlet boundary");
+      inlet_pressure_by_element_[static_cast<std::size_t>(tree_metadata_.root_element_index)] =
+          rhs_value(residual, root_boundary_global_row_) / root_boundary_coeff;
+    }
 
     const auto top_down_start = Clock::now();
     for (const auto& layer : tree_metadata_.top_down_layers)
     {
+      std::vector<std::vector<ScalarMessage>> pressure_messages_by_rank(
+          static_cast<std::size_t>(comm_size));
       for (const int element_index : layer)
       {
+        const auto& element = tree_metadata_.elements[static_cast<std::size_t>(element_index)];
+        if (element.owner_rank != my_rank)
+        {
+          continue;
+        }
+
         const double inlet_pressure =
             inlet_pressure_by_element_[static_cast<std::size_t>(element_index)];
         FOUR_C_ASSERT_ALWAYS(!std::isnan(inlet_pressure),
             "DistributedTreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
-            tree_metadata_.elements[static_cast<std::size_t>(element_index)].global_element_id + 1);
-        const auto& element = tree_metadata_.elements[static_cast<std::size_t>(element_index)];
+            element.global_element_id + 1);
         const auto& plan = element_plans_[static_cast<std::size_t>(element_index)];
         const auto& workspace = element_workspaces_[static_cast<std::size_t>(element_index)];
 
-        set_local_delta_value(delta, element.global_dof_ids[0], inlet_pressure);
+        queue_or_set_delta(delta, correction_owners, correction_messages_by_rank, my_rank,
+            element.global_dof_ids[0], inlet_pressure);
         for (std::size_t i = 0; i < plan.unknown_global_dof_ids.size(); ++i)
         {
           const double value = workspace.slope[i] * inlet_pressure + workspace.intercept[i];
-          set_local_delta_value(delta, plan.unknown_global_dof_ids[i], value);
+          queue_or_set_delta(delta, correction_owners, correction_messages_by_rank, my_rank,
+              plan.unknown_global_dof_ids[i], value);
         }
 
         if (plan.is_leaf)
@@ -687,13 +836,62 @@ namespace ReducedLung
             child_interface_index < plan.child_interfaces.size(); ++child_interface_index)
         {
           const auto& child_interface = plan.child_interfaces[child_interface_index];
-          inlet_pressure_by_element_[static_cast<std::size_t>(
-              child_interface.child_element_index)] =
+          const double child_inlet_pressure =
               workspace.child_pressure_slope[child_interface_index] * outlet_pressure +
               workspace.child_pressure_intercept[child_interface_index];
+          const auto& child =
+              tree_metadata_
+                  .elements[static_cast<std::size_t>(child_interface.child_element_index)];
+          if (child.owner_rank == my_rank)
+          {
+            inlet_pressure_by_element_[static_cast<std::size_t>(
+                child_interface.child_element_index)] = child_inlet_pressure;
+          }
+          else
+          {
+            pressure_messages_by_rank[static_cast<std::size_t>(child.owner_rank)].push_back(
+                ScalarMessage{
+                    .id = child_interface.child_element_index, .value = child_inlet_pressure});
+          }
         }
       }
+
+      const auto communication_start = Clock::now();
+      const auto received_pressures = exchange_scalar_messages(pressure_messages_by_rank, comm_);
+      if (profile_ != nullptr)
+      {
+        profile_->communication_time += elapsed_seconds(communication_start);
+        profile_->boundary_pressure_message_count += count_messages(pressure_messages_by_rank);
+        profile_->communication_bytes +=
+            count_messages(pressure_messages_by_rank) * (sizeof(int) + sizeof(double));
+      }
+      for (const auto& pressure : received_pressures)
+      {
+        FOUR_C_ASSERT_ALWAYS(
+            pressure.id >= 0 && pressure.id < static_cast<int>(tree_metadata_.elements.size()),
+            "DistributedTreeNewtonLinearSolver received invalid pressure element index {}.",
+            pressure.id);
+        inlet_pressure_by_element_[static_cast<std::size_t>(pressure.id)] = pressure.value;
+      }
     }
+
+    const auto correction_communication_start = Clock::now();
+    const auto received_corrections = exchange_scalar_messages(correction_messages_by_rank, comm_);
+    if (profile_ != nullptr)
+    {
+      profile_->communication_time += elapsed_seconds(correction_communication_start);
+      profile_->correction_scatter_message_count += count_messages(correction_messages_by_rank);
+      profile_->communication_bytes +=
+          count_messages(correction_messages_by_rank) * (sizeof(int) + sizeof(double));
+    }
+    for (const auto& correction : received_corrections)
+    {
+      FOUR_C_ASSERT_ALWAYS(delta.get_map().lid(correction.id) >= 0,
+          "DistributedTreeNewtonLinearSolver received correction for nonlocal dof {}.",
+          correction.id);
+      delta.replace_global_value(correction.id, correction.value);
+    }
+
     if (profile_ != nullptr)
     {
       profile_->top_down_time += elapsed_seconds(top_down_start);

@@ -32,6 +32,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace
@@ -125,11 +126,74 @@ namespace
     return params;
   }
 
+  ReducedLungParameters make_bifurcation_airway_parameters(double dt)
+  {
+    ReducedLungParameters params{};
+    params.air_properties = {
+        .density = 1.176e-06,
+        .dynamic_viscosity = 1.79105e-05,
+    };
+    params.dynamics = ReducedLungParameters::Dynamics{
+        .time_increment = dt,
+        .number_of_steps = 1,
+        .restart_every = 1,
+        .results_every = 1,
+        .linear_solver = 1,
+        .max_nonlinear_iterations = 10,
+        .nonlinear_residual_tolerance = 1.0e-8,
+        .nonlinear_increment_tolerance = 1.0e-10,
+    };
+
+    params.lung_tree.topology.num_nodes = 4;
+    params.lung_tree.topology.num_elements = 3;
+    params.lung_tree.topology.node_coordinates =
+        Core::IO::InputField<std::vector<double>>(std::unordered_map<int, std::vector<double>>{
+            {1, {0.0, 0.0, 0.0}},
+            {2, {1.0, 0.0, 0.0}},
+            {3, {2.0, 1.0, 0.0}},
+            {4, {2.0, -1.0, 0.0}},
+        });
+    params.lung_tree.topology.element_nodes =
+        Core::IO::InputField<std::vector<int>>(std::unordered_map<int, std::vector<int>>{
+            {1, {1, 2}},
+            {2, {2, 3}},
+            {3, {2, 4}},
+        });
+    params.lung_tree.element_type = Core::IO::InputField<ElementType>(ElementType::Airway);
+    params.lung_tree.generation =
+        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 0}, {2, 1}, {3, 1}});
+
+    params.lung_tree.airways.radius = Core::IO::InputField<double>(
+        std::unordered_map<int, double>{{1, 1.0}, {2, 0.85}, {3, 0.7}});
+    params.lung_tree.airways.flow_model.resistance_type =
+        Core::IO::InputField<ResistanceType>(ResistanceType::Linear);
+    params.lung_tree.airways.flow_model.include_inertia = Core::IO::InputField<bool>(false);
+    params.lung_tree.airways.wall_model_type =
+        Core::IO::InputField<WallModelType>(WallModelType::Rigid);
+    params.lung_tree.terminal_units.rheological_model.rheological_model_type =
+        Core::IO::InputField<RheologyType>(RheologyType::KelvinVoigt);
+    params.lung_tree.terminal_units.elasticity_model.elasticity_model_type =
+        Core::IO::InputField<ElasticityType>(ElasticityType::Linear);
+    params.lung_tree.terminal_units.elasticity_model.linear.elasticity_e =
+        Core::IO::InputField<double>(1.0);
+
+    params.boundary_conditions.num_conditions = 3;
+    params.boundary_conditions.bc_type = Core::IO::InputField<BoundaryType>(BoundaryType::Pressure);
+    params.boundary_conditions.node_id =
+        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 3}, {3, 4}});
+    params.boundary_conditions.value_source =
+        ReducedLungParameters::BoundaryConditions::ValueSource::bc_function_id;
+    params.boundary_conditions.function_id =
+        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 2}, {3, 2}});
+
+    return params;
+  }
+
   struct DistributedTreeFixture
   {
-    ReducedLungParameters params = make_serial_airway_parameters(0.1);
+    ReducedLungParameters params;
     Core::Utils::FunctionManager function_manager = make_function_manager();
-    Core::FE::Discretization discretization{"distributed_tree_test", MPI_COMM_WORLD, 3};
+    Core::FE::Discretization discretization;
     Airways::AirwayContainer airways;
     TerminalUnits::TerminalUnitContainer terminal_units;
     std::map<int, int> dof_per_ele;
@@ -152,7 +216,8 @@ namespace
     Teuchos::ParameterList solver_params;
     std::function<const Teuchos::ParameterList&(int)> solver_params_callback;
 
-    DistributedTreeFixture()
+    DistributedTreeFixture(std::string name, ReducedLungParameters input_params)
+        : params(std::move(input_params)), discretization(std::move(name), MPI_COMM_WORLD, 3)
     {
       Core::Rebalance::RebalanceParameters rebalance_parameters;
       build_discretization_from_topology(
@@ -288,9 +353,29 @@ namespace
     }
   }
 
-  TEST(ReducedLungDistributedTreeLinearSolverTests, SerialAirwaysMatchSparseSolverOnTwoRanks)
+  int count_cross_rank_edges(const ReducedLungTreeMetadata& tree_metadata)
   {
-    DistributedTreeFixture fixture;
+    int cross_rank_edges = 0;
+    for (const auto& element : tree_metadata.elements)
+    {
+      if (element.parent_element_index == -1)
+      {
+        continue;
+      }
+      const auto& parent =
+          tree_metadata.elements[static_cast<std::size_t>(element.parent_element_index)];
+      if (parent.owner_rank != element.owner_rank)
+      {
+        ++cross_rank_edges;
+      }
+    }
+    return cross_rank_edges;
+  }
+
+  void compare_distributed_tree_and_sparse_corrections(
+      const std::string& name, const ReducedLungParameters& params)
+  {
+    DistributedTreeFixture fixture(name, params);
     const double current_time = fixture.params.dynamics.time_increment;
 
     fixture.sync_state_from_x();
@@ -298,6 +383,7 @@ namespace
     fixture.assemble_jacobian(current_time);
     auto tree_linearization = fixture.assemble_tree_linearization(current_time);
     const auto tree_metadata = fixture.build_tree_metadata();
+    EXPECT_GT(count_cross_rank_edges(tree_metadata), 0);
 
     Core::LinAlg::Vector<double> sparse_delta(*fixture.row_map, true);
     Core::LinAlg::Vector<double> tree_delta(*fixture.row_map, true);
@@ -322,5 +408,17 @@ namespace
     tree_solver.solve(*fixture.sysmat, residual, *fixture.x, linear_system_metadata, tree_delta);
 
     expect_vectors_near(sparse_delta, tree_delta, 1.0e-9);
+  }
+
+  TEST(ReducedLungDistributedTreeLinearSolverTests, SerialAirwaysMatchSparseSolverOnTwoRanks)
+  {
+    compare_distributed_tree_and_sparse_corrections(
+        "distributed_tree_serial_airways", make_serial_airway_parameters(0.1));
+  }
+
+  TEST(ReducedLungDistributedTreeLinearSolverTests, BifurcationAirwaysMatchSparseSolverOnTwoRanks)
+  {
+    compare_distributed_tree_and_sparse_corrections(
+        "distributed_tree_bifurcation_airways", make_bifurcation_airway_parameters(0.1));
   }
 }  // namespace

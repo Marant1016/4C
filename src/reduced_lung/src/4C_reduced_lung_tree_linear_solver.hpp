@@ -131,9 +131,9 @@ namespace ReducedLung
   /**
    * @brief MPI-capable structured-tree Newton correction solver.
    *
-   * This first distributed implementation keeps the tree solve replicated after gathering the
-   * locally assembled structured coefficients. It enables distributed reduced-lung runs without
-   * changing the Newton loop or local assembly ownership rules.
+   * This implementation performs bottom-up and top-down work on the ranks that own tree elements,
+   * exchanging only condensed child-subtree relations, inlet-pressure corrections, and final
+   * correction values across rank boundaries.
    */
   class DistributedTreeNewtonLinearSolver : public NewtonLinearSolver
   {

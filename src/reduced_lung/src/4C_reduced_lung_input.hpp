@@ -54,6 +54,7 @@ namespace ReducedLung
       double nonlinear_residual_tolerance;
       double nonlinear_increment_tolerance;
       OutputVerbosity output_verbosity = OutputVerbosity::minimal;
+      // Keep NOX as the safe default; NewtonSparse and NewtonTree are explicit opt-in workflows.
       NonlinearSolverType nonlinear_solver = NonlinearSolverType::Nox;
     } dynamics;
     /**

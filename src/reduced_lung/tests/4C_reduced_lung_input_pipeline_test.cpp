@@ -209,4 +209,15 @@ namespace
     const ReducedLungParameters::Dynamics dynamics{};
     EXPECT_EQ(dynamics.nonlinear_solver, ReducedLungParameters::NonlinearSolverType::Nox);
   }
+
+  TEST(ReducedLungInputPipelineTest, NewtonNonlinearSolversAreExplicitOptInValues)
+  {
+    ReducedLungParameters::Dynamics dynamics{};
+
+    dynamics.nonlinear_solver = ReducedLungParameters::NonlinearSolverType::NewtonSparse;
+    EXPECT_EQ(dynamics.nonlinear_solver, ReducedLungParameters::NonlinearSolverType::NewtonSparse);
+
+    dynamics.nonlinear_solver = ReducedLungParameters::NonlinearSolverType::NewtonTree;
+    EXPECT_EQ(dynamics.nonlinear_solver, ReducedLungParameters::NonlinearSolverType::NewtonTree);
+  }
 }  // namespace

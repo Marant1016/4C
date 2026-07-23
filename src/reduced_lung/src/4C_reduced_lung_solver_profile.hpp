@@ -64,6 +64,9 @@ namespace ReducedLung
     std::uint64_t coefficient_lookup_count = 0;
     std::uint64_t communicated_coefficient_count = 0;
     std::uint64_t communicated_residual_count = 0;
+    std::uint64_t boundary_relation_message_count = 0;
+    std::uint64_t boundary_pressure_message_count = 0;
+    std::uint64_t correction_scatter_message_count = 0;
     std::uint64_t communication_bytes = 0;
     std::uint64_t element_count = 0;
     std::uint64_t total_local_block_dofs = 0;
