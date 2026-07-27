@@ -72,6 +72,14 @@ namespace ReducedLung
         Core::LinAlg::Vector<double>& delta) override;
 
    private:
+    struct ElementGroup
+    {
+      int begin = 0;
+      int end = 0;
+      int block_size = 0;
+      int child_count = 0;
+    };
+
     void build_symbolic_plan();
 
     const ReducedLungTreeMetadata& tree_metadata_;
@@ -105,6 +113,10 @@ namespace ReducedLung
     std::vector<int> child_inlet_pressure_local_dof_;
     std::vector<int> child_inlet_flow_local_dof_;
     std::vector<int> parent_outlet_pressure_unknown_index_;
+
+    std::vector<int> grouped_element_indices_;
+    std::vector<std::vector<ElementGroup>> bottom_up_layer_groups_;
+    std::vector<std::vector<ElementGroup>> top_down_layer_groups_;
 
     std::vector<double> workspace_matrix_;
     std::vector<double> workspace_rhs_constant_;
