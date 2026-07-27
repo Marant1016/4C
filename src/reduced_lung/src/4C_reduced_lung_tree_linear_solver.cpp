@@ -191,28 +191,28 @@ namespace ReducedLung
       return value;
     }
 
-    void solve_dense_system(std::vector<std::vector<double>>& matrix, std::vector<double>& rhs_a,
+    void solve_dense_system(std::vector<double>& matrix, std::vector<double>& rhs_a,
         std::vector<double>& rhs_b, std::vector<double>& solution_a,
         std::vector<double>& solution_b, double pivot_tolerance, const std::string& context)
     {
       const int n = static_cast<int>(rhs_a.size());
+      const auto matrix_entry = [&matrix, n](int row, int col) -> double&
+      { return matrix[static_cast<std::size_t>(row * n + col)]; };
       FOUR_C_ASSERT_ALWAYS(static_cast<int>(rhs_b.size()) == n,
           "TreeNewtonLinearSolver dense system has inconsistent RHS size for {}.", context);
       FOUR_C_ASSERT_ALWAYS(
           static_cast<int>(solution_a.size()) == n && static_cast<int>(solution_b.size()) == n,
           "TreeNewtonLinearSolver dense system has inconsistent solution size for {}.", context);
-      FOUR_C_ASSERT_ALWAYS(static_cast<int>(matrix.size()) == n,
+      FOUR_C_ASSERT_ALWAYS(static_cast<int>(matrix.size()) == n * n,
           "TreeNewtonLinearSolver dense system has inconsistent size for {}.", context);
 
       for (int pivot_col = 0; pivot_col < n; ++pivot_col)
       {
         int pivot_row = pivot_col;
-        double pivot_abs = std::abs(
-            matrix[static_cast<std::size_t>(pivot_col)][static_cast<std::size_t>(pivot_col)]);
+        double pivot_abs = std::abs(matrix_entry(pivot_col, pivot_col));
         for (int row = pivot_col + 1; row < n; ++row)
         {
-          const double candidate_abs =
-              std::abs(matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(pivot_col)]);
+          const double candidate_abs = std::abs(matrix_entry(row, pivot_col));
           if (candidate_abs > pivot_abs)
           {
             pivot_abs = candidate_abs;
@@ -226,29 +226,28 @@ namespace ReducedLung
 
         if (pivot_row != pivot_col)
         {
-          std::swap(matrix[static_cast<std::size_t>(pivot_col)],
-              matrix[static_cast<std::size_t>(pivot_row)]);
+          for (int col = 0; col < n; ++col)
+          {
+            std::swap(matrix_entry(pivot_col, col), matrix_entry(pivot_row, col));
+          }
           std::swap(rhs_a[static_cast<std::size_t>(pivot_col)],
               rhs_a[static_cast<std::size_t>(pivot_row)]);
           std::swap(rhs_b[static_cast<std::size_t>(pivot_col)],
               rhs_b[static_cast<std::size_t>(pivot_row)]);
         }
 
-        const double pivot =
-            matrix[static_cast<std::size_t>(pivot_col)][static_cast<std::size_t>(pivot_col)];
+        const double pivot = matrix_entry(pivot_col, pivot_col);
         for (int row = pivot_col + 1; row < n; ++row)
         {
-          const double factor =
-              matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(pivot_col)] / pivot;
+          const double factor = matrix_entry(row, pivot_col) / pivot;
           if (std::abs(factor) <= std::numeric_limits<double>::epsilon())
           {
             continue;
           }
-          matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(pivot_col)] = 0.0;
+          matrix_entry(row, pivot_col) = 0.0;
           for (int col = pivot_col + 1; col < n; ++col)
           {
-            matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)] -=
-                factor * matrix[static_cast<std::size_t>(pivot_col)][static_cast<std::size_t>(col)];
+            matrix_entry(row, col) -= factor * matrix_entry(pivot_col, col);
           }
           rhs_a[static_cast<std::size_t>(row)] -=
               factor * rhs_a[static_cast<std::size_t>(pivot_col)];
@@ -263,13 +262,11 @@ namespace ReducedLung
         double value_b = rhs_b[static_cast<std::size_t>(row)];
         for (int col = row + 1; col < n; ++col)
         {
-          const double matrix_entry =
-              matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)];
-          value_a -= matrix_entry * solution_a[static_cast<std::size_t>(col)];
-          value_b -= matrix_entry * solution_b[static_cast<std::size_t>(col)];
+          const double entry = matrix_entry(row, col);
+          value_a -= entry * solution_a[static_cast<std::size_t>(col)];
+          value_b -= entry * solution_b[static_cast<std::size_t>(col)];
         }
-        const double diagonal =
-            matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(row)];
+        const double diagonal = matrix_entry(row, row);
         solution_a[static_cast<std::size_t>(row)] = value_a / diagonal;
         solution_b[static_cast<std::size_t>(row)] = value_b / diagonal;
       }
@@ -314,7 +311,8 @@ namespace ReducedLung
     element_plans_.resize(tree_metadata_.elements.size());
     element_workspaces_.clear();
     element_workspaces_.resize(tree_metadata_.elements.size());
-    subtree_relations_.assign(tree_metadata_.elements.size(), SubtreeRelation{});
+    subtree_relation_G_.assign(tree_metadata_.elements.size(), 0.0);
+    subtree_relation_h_.assign(tree_metadata_.elements.size(), 0.0);
     inlet_pressure_by_element_.assign(
         tree_metadata_.elements.size(), std::numeric_limits<double>::quiet_NaN());
     if (profile_ != nullptr)
@@ -355,7 +353,8 @@ namespace ReducedLung
         plan.equation_rows.push_back(element.first_local_state_equation_id + row_offset);
       }
 
-      plan.child_interfaces.clear();
+      plan.child_interfaces = {};
+      plan.child_interface_count = 0;
       if (element.is_leaf())
       {
         const auto outlet_boundaries =
@@ -374,7 +373,6 @@ namespace ReducedLung
             element.global_element_id + 1);
 
         plan.equation_rows.push_back(junction->first_local_equation_id + junction->child_count);
-        plan.child_interfaces.reserve(static_cast<std::size_t>(junction->child_count));
         for (int child_slot = 0; child_slot < junction->child_count; ++child_slot)
         {
           const int child_element_index =
@@ -382,7 +380,7 @@ namespace ReducedLung
           const auto& child =
               tree_metadata_.elements[static_cast<std::size_t>(child_element_index)];
           const int parent_outlet_pressure_global_dof = element.global_dof_ids[1];
-          plan.child_interfaces.push_back(ChildInterfacePlan{
+          plan.child_interfaces[static_cast<std::size_t>(child_slot)] = ChildInterfacePlan{
               .child_element_index = child_element_index,
               .pressure_row = junction->first_local_equation_id + child_slot,
               .parent_outlet_pressure_local_dof = element.local_dof_ids[1],
@@ -390,7 +388,8 @@ namespace ReducedLung
               .child_inlet_flow_local_dof = child.local_dof_ids[2],
               .parent_outlet_pressure_unknown_index = unknown_index_for_global_dof(
                   plan.unknown_global_dof_ids, parent_outlet_pressure_global_dof),
-          });
+          };
+          ++plan.child_interface_count;
         }
       }
 
@@ -408,13 +407,14 @@ namespace ReducedLung
         profile_->max_local_block_size =
             std::max(profile_->max_local_block_size, static_cast<int>(block_size));
       }
-      workspace.matrix.assign(block_size, std::vector<double>(block_size, 0.0));
+      workspace.matrix.assign(block_size * block_size, 0.0);
       workspace.rhs_constant.assign(block_size, 0.0);
       workspace.rhs_inlet_pressure.assign(block_size, 0.0);
       workspace.intercept.assign(block_size, 0.0);
       workspace.slope.assign(block_size, 0.0);
-      workspace.child_pressure_slope.assign(plan.child_interfaces.size(), 0.0);
-      workspace.child_pressure_intercept.assign(plan.child_interfaces.size(), 0.0);
+      std::fill(workspace.child_pressure_slope.begin(), workspace.child_pressure_slope.end(), 0.0);
+      std::fill(workspace.child_pressure_intercept.begin(),
+          workspace.child_pressure_intercept.end(), 0.0);
     }
   }
 
@@ -478,7 +478,8 @@ namespace ReducedLung
     const auto add_equation_row = [&](const ElementSolvePlan& plan, ElementWorkspace& workspace,
                                       int equation_index, int local_row, double rhs_shift)
     {
-      auto& matrix_row = workspace.matrix[static_cast<std::size_t>(equation_index)];
+      const std::size_t block_size = plan.unknown_local_dof_ids.size();
+      const std::size_t matrix_row_offset = static_cast<std::size_t>(equation_index) * block_size;
       workspace.rhs_constant[static_cast<std::size_t>(equation_index)] =
           rhs_value(residual, local_row) - rhs_shift;
       workspace.rhs_inlet_pressure[static_cast<std::size_t>(equation_index)] =
@@ -486,12 +487,13 @@ namespace ReducedLung
 
       for (std::size_t i = 0; i < plan.unknown_local_dof_ids.size(); ++i)
       {
-        matrix_row[i] =
+        workspace.matrix[matrix_row_offset + i] =
             matrix_value(*coefficients, local_row, plan.unknown_local_dof_ids[i], pivot_tolerance_);
       }
     };
 
-    std::fill(subtree_relations_.begin(), subtree_relations_.end(), SubtreeRelation{});
+    std::fill(subtree_relation_G_.begin(), subtree_relation_G_.end(), 0.0);
+    std::fill(subtree_relation_h_.begin(), subtree_relation_h_.end(), 0.0);
 
     const auto bottom_up_start = Clock::now();
     for (const auto& layer : tree_metadata_.bottom_up_layers)
@@ -514,14 +516,16 @@ namespace ReducedLung
             continue;
           }
 
-          auto& matrix_row = workspace.matrix[equation_index];
+          const std::size_t block_size = plan.unknown_local_dof_ids.size();
+          const std::size_t matrix_row_offset = equation_index * block_size;
           double rhs_shift = 0.0;
           for (std::size_t child_interface_index = 0;
-              child_interface_index < plan.child_interfaces.size(); ++child_interface_index)
+              child_interface_index < static_cast<std::size_t>(plan.child_interface_count);
+              ++child_interface_index)
           {
             const auto& child_interface = plan.child_interfaces[child_interface_index];
-            const auto& child_relation =
-                subtree_relations_[static_cast<std::size_t>(child_interface.child_element_index)];
+            const std::size_t child_element_index =
+                static_cast<std::size_t>(child_interface.child_element_index);
 
             const double pressure_parent_coeff = required_matrix_value(*coefficients,
                 child_interface.pressure_row, child_interface.parent_outlet_pressure_local_dof,
@@ -536,16 +540,19 @@ namespace ReducedLung
             workspace.child_pressure_slope[child_interface_index] = child_pressure_slope;
             workspace.child_pressure_intercept[child_interface_index] = child_pressure_intercept;
 
-            const double child_flow_slope = child_relation.G * child_pressure_slope;
+            const double child_flow_slope =
+                subtree_relation_G_[child_element_index] * child_pressure_slope;
             const double child_flow_intercept =
-                child_relation.G * child_pressure_intercept + child_relation.h;
+                subtree_relation_G_[child_element_index] * child_pressure_intercept +
+                subtree_relation_h_[child_element_index];
 
             const double flow_child_coeff = required_matrix_value(*coefficients, local_row,
                 child_interface.child_inlet_flow_local_dof, pivot_tolerance_,
                 "junction flow child-flow coefficient");
 
-            matrix_row[static_cast<std::size_t>(
-                child_interface.parent_outlet_pressure_unknown_index)] +=
+            const std::size_t parent_outlet_pressure_index =
+                static_cast<std::size_t>(child_interface.parent_outlet_pressure_unknown_index);
+            workspace.matrix[matrix_row_offset + parent_outlet_pressure_index] +=
                 flow_child_coeff * child_flow_slope;
             rhs_shift += flow_child_coeff * child_flow_intercept;
           }
@@ -562,10 +569,10 @@ namespace ReducedLung
           ++profile_->dense_solve_count;
         }
 
-        subtree_relations_[static_cast<std::size_t>(element_index)] = SubtreeRelation{
-            .G = workspace.slope[static_cast<std::size_t>(plan.inlet_flow_unknown_index)],
-            .h = workspace.intercept[static_cast<std::size_t>(plan.inlet_flow_unknown_index)],
-        };
+        subtree_relation_G_[static_cast<std::size_t>(element_index)] =
+            workspace.slope[static_cast<std::size_t>(plan.inlet_flow_unknown_index)];
+        subtree_relation_h_[static_cast<std::size_t>(element_index)] =
+            workspace.intercept[static_cast<std::size_t>(plan.inlet_flow_unknown_index)];
       }
     }
     if (profile_ != nullptr)
@@ -606,7 +613,7 @@ namespace ReducedLung
           continue;
         }
 
-        FOUR_C_ASSERT_ALWAYS(!plan.child_interfaces.empty(),
+        FOUR_C_ASSERT_ALWAYS(plan.child_interface_count > 0,
             "TreeNewtonLinearSolver found no children while recovering element {}.",
             plan.global_element_id + 1);
         const int outlet_pressure_index =
@@ -615,7 +622,8 @@ namespace ReducedLung
             workspace.slope[static_cast<std::size_t>(outlet_pressure_index)] * inlet_pressure +
             workspace.intercept[static_cast<std::size_t>(outlet_pressure_index)];
         for (std::size_t child_interface_index = 0;
-            child_interface_index < plan.child_interfaces.size(); ++child_interface_index)
+            child_interface_index < static_cast<std::size_t>(plan.child_interface_count);
+            ++child_interface_index)
         {
           const auto& child_interface = plan.child_interfaces[child_interface_index];
           inlet_pressure_by_element_[static_cast<std::size_t>(
