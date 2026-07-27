@@ -82,7 +82,7 @@ This is a small Struct-of-Arrays step and prepares the bottom-up loop for later 
 
 This step reduces pointer chasing and dynamic per-element storage in the serial solver hot path. It is intended as preparation for later optimizations such as specialized `2x2`/`3x3` local solvers and direct structured coefficient access.
 
-## Verification
+## Verification And Baseline Measurement
 
 Verification run successfully:
 
@@ -92,4 +92,59 @@ git diff --check
 ctest -R "^unittests_reduced_lung$" --output-on-failure
 ```
 
-The serial reduced-lung unit-test target passed. Benchmarks were not run in this step.
+The serial reduced-lung unit-test target passed.
+
+Additional Phase 1 baseline measurements were run on 2026-07-27 from repository state:
+
+```text
+932b3472c0783174ed1b5d66ee7f751e16b0d6a3
+```
+
+Before updating this note, `git status --short` produced no output.
+
+The release reduced-lung benchmark target was built with:
+
+```text
+/scratch/Rodriguez/workspace/CLion-2026.1.3/clion-2026.1.3/bin/cmake/linux/x64/bin/cmake --build build/release --target benchmarktests_reduced_lung --parallel 4
+```
+
+Serial structured tree linear-solve baseline command:
+
+```text
+./build/release/tests/benchmarktests_reduced_lung --benchmark_filter=ReducedLung/LinearSolve/BalancedAirways/StructuredTree --benchmark_repetitions=5 --benchmark_min_time=0.01s
+```
+
+Serial `NewtonTree` full-solve baseline command:
+
+```text
+./build/release/tests/benchmarktests_reduced_lung --benchmark_filter="ReducedLung/FullSolve/(SingleTerminalUnit|SerialAirways|BalancedAirways)/NewtonTree" --benchmark_repetitions=5 --benchmark_min_time=0.01s
+```
+
+The benchmark run emitted expected CPU-scaling and PHG redistribution warnings, so the values should be treated as baseline guidance rather than final performance numbers.
+
+### Structured Tree Linear-Solve Means
+
+| Benchmark | Elements | Dofs | Time | tree_solve_s | tree_bottom_up_s | tree_top_down_s | tree_dense_s | tree_lookup_s | tree_dense_solves | tree_lookups | tree_workspace_dofs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `StructuredTree/2_mean` | 3 | 9 | 1.89 us | 1.86968 us | 1.45522 us | 245.232 ns | 135.933 ns | 530.609 ns | 3 | 25 | 6 |
+| `StructuredTree/3_mean` | 7 | 21 | 5.91 us | 5.87335 us | 4.7734 us | 859.658 ns | 372.418 ns | 1.77573 us | 7 | 61 | 14 |
+| `StructuredTree/4_mean` | 15 | 45 | 11.1 us | 11.0916 us | 9.36255 us | 1.50767 us | 716.339 ns | 3.4132 us | 15 | 133 | 30 |
+| `StructuredTree/5_mean` | 31 | 93 | 20.7 us | 20.6226 us | 17.8217 us | 2.57538 us | 1.49776 us | 6.49799 us | 31 | 277 | 62 |
+
+### Full `NewtonTree` Solve Means
+
+| Benchmark | Elements | Dofs | Time | newton_total_s | linear_solve_s | tree_solve_s | tree_bottom_up_s | tree_top_down_s | tree_dense_s | tree_lookup_s | tree_assembly_s | residual_s | state_sync_s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `SingleTerminalUnit/NewtonTree_mean` | 1 | 3 | 16.5 us | 13.5473 us | 2.55404 us | 2.43342 us | 1.51263 us | 301.644 ns | 359.465 ns | 614.491 ns | 1.09612 us | 2.28722 us | 6.37775 us |
+| `SerialAirways/NewtonTree_mean` | 9 | 27 | 42.4 us | 39.5042 us | 14.7652 us | 14.6393 us | 12.0637 us | 1.89213 us | 1.26031 us | 4.3381 us | 4.57375 us | 4.5209 us | 14.2906 us |
+| `BalancedAirways/NewtonTree_mean` | 15 | 45 | 73.8 us | 70.8315 us | 29.1507 us | 29.0119 us | 24.0599 us | 4.13465 us | 1.93199 us | 9.02792 us | 7.95481 us | 7.3252 us | 24.8369 us |
+
+All three full-solve benchmark cases reported `nonlinear_iterations=2`.
+
+### Baseline Conclusion
+
+For the serial structured tree linear solve, bottom-up condensation is the dominant phase. In the largest measured linear-solve case (`StructuredTree/5_mean`), `tree_bottom_up_s` was about `17.8217 us` of `20.6226 us` total tree solve time. Coefficient lookup was also significant at `6.49799 us`, while dense local solves were only `1.49776 us`.
+
+For the full `BalancedAirways/NewtonTree_mean` solve, the tree solve took `29.0119 us` of `70.8315 us` custom Newton time. State synchronization (`24.8369 us`), structured tree assembly (`7.95481 us`), and residual assembly (`7.3252 us`) are also visible costs.
+
+The next optimization phase should therefore prioritize SoA/grouped bottom-up traversal and reduced coefficient lookup overhead before focusing only on dense local solver kernels.
