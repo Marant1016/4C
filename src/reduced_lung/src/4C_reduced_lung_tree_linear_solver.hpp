@@ -72,42 +72,6 @@ namespace ReducedLung
         Core::LinAlg::Vector<double>& delta) override;
 
    private:
-    struct ChildInterfacePlan
-    {
-      int child_element_index = -1;
-      int pressure_row = -1;
-      int parent_outlet_pressure_local_dof = -1;
-      int child_inlet_pressure_local_dof = -1;
-      int child_inlet_flow_local_dof = -1;
-      int parent_outlet_pressure_unknown_index = -1;
-    };
-
-    struct ElementSolvePlan
-    {
-      int element_index = -1;
-      int global_element_id = -1;
-      int inlet_pressure_local_dof = -1;
-      int inlet_flow_unknown_index = -1;
-      bool is_leaf = false;
-      std::vector<int> unknown_global_dof_ids;
-      std::vector<int> unknown_local_dof_ids;
-      std::vector<int> equation_rows;
-      std::array<ChildInterfacePlan, 2> child_interfaces{};
-      int child_interface_count = 0;
-      std::string context;
-    };
-
-    struct ElementWorkspace
-    {
-      std::vector<double> matrix;
-      std::vector<double> rhs_constant;
-      std::vector<double> rhs_inlet_pressure;
-      std::vector<double> intercept;
-      std::vector<double> slope;
-      std::array<double, 2> child_pressure_slope{0.0, 0.0};
-      std::array<double, 2> child_pressure_intercept{0.0, 0.0};
-    };
-
     void build_symbolic_plan();
 
     const ReducedLungTreeMetadata& tree_metadata_;
@@ -118,8 +82,39 @@ namespace ReducedLung
 
     int root_boundary_row_ = -1;
     int root_inlet_pressure_local_dof_ = -1;
-    std::vector<ElementSolvePlan> element_plans_;
-    std::vector<ElementWorkspace> element_workspaces_;
+    std::vector<int> global_element_id_;
+    std::vector<int> inlet_pressure_local_dof_;
+    std::vector<int> inlet_flow_unknown_index_;
+    std::vector<int> outlet_pressure_unknown_index_;
+    std::vector<int> block_size_;
+    std::vector<int> child_interface_count_;
+    std::vector<unsigned char> is_leaf_;
+
+    std::vector<int> unknown_offset_;
+    std::vector<int> equation_offset_;
+    std::vector<int> child_interface_offset_;
+    std::vector<int> matrix_offset_;
+
+    std::vector<int> unknown_global_dof_ids_;
+    std::vector<int> unknown_local_dof_ids_;
+    std::vector<int> equation_rows_;
+
+    std::vector<int> child_element_index_;
+    std::vector<int> pressure_row_;
+    std::vector<int> parent_outlet_pressure_local_dof_;
+    std::vector<int> child_inlet_pressure_local_dof_;
+    std::vector<int> child_inlet_flow_local_dof_;
+    std::vector<int> parent_outlet_pressure_unknown_index_;
+
+    std::vector<double> workspace_matrix_;
+    std::vector<double> workspace_rhs_constant_;
+    std::vector<double> workspace_rhs_inlet_pressure_;
+    std::vector<double> workspace_intercept_;
+    std::vector<double> workspace_slope_;
+    std::vector<double> child_pressure_slope_;
+    std::vector<double> child_pressure_intercept_;
+    std::vector<std::string> element_context_;
+
     std::vector<double> subtree_relation_G_;
     std::vector<double> subtree_relation_h_;
     std::vector<double> inlet_pressure_by_element_;
