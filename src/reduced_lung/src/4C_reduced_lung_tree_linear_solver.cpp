@@ -827,6 +827,7 @@ namespace ReducedLung
 
     int max_2x2_group_size = 0;
     int max_3x3_group_size = 0;
+    int max_top_down_group_size = 0;
     for (const auto& layer_groups : bottom_up_layer_groups_)
     {
       for (const auto& group : layer_groups)
@@ -839,6 +840,13 @@ namespace ReducedLung
         {
           max_3x3_group_size = std::max(max_3x3_group_size, group.end - group.begin);
         }
+      }
+    }
+    for (const auto& layer_groups : top_down_layer_groups_)
+    {
+      for (const auto& group : layer_groups)
+      {
+        max_top_down_group_size = std::max(max_top_down_group_size, group.end - group.begin);
       }
     }
     batch_2x2_a00_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
@@ -876,6 +884,10 @@ namespace ReducedLung
     batch_3x3_slope1_.assign(static_cast<std::size_t>(max_3x3_group_size), 0.0);
     batch_3x3_slope2_.assign(static_cast<std::size_t>(max_3x3_group_size), 0.0);
     batch_3x3_fallback_lanes_.assign(static_cast<std::size_t>(max_3x3_group_size), 0);
+    top_down_inlet_pressure_.assign(static_cast<std::size_t>(max_top_down_group_size), 0.0);
+    top_down_unknown_values_.assign(static_cast<std::size_t>(max_top_down_group_size), 0.0);
+    top_down_outlet_pressure_.assign(static_cast<std::size_t>(max_top_down_group_size), 0.0);
+    top_down_child_pressure_.assign(static_cast<std::size_t>(max_top_down_group_size), 0.0);
   }
 
   NewtonLinearizationType TreeNewtonLinearSolver::linearization_type() const
@@ -1151,60 +1163,124 @@ namespace ReducedLung
       set_inlet_pressure(tree_metadata_.root_element_index,
           rhs_value(residual, root_boundary_row_) / root_boundary_coeff);
 
+      const auto recover_top_down_group = [&](const ElementGroup& group)
+      {
+        const int group_size = group.end - group.begin;
+        FOUR_C_ASSERT_ALWAYS(group_size >= 0,
+            "TreeNewtonLinearSolver top-down group has invalid range [{}, {}).", group.begin,
+            group.end);
+        FOUR_C_ASSERT_ALWAYS(static_cast<int>(top_down_inlet_pressure_.size()) >= group_size &&
+                                 static_cast<int>(top_down_unknown_values_.size()) >= group_size &&
+                                 static_cast<int>(top_down_outlet_pressure_.size()) >= group_size &&
+                                 static_cast<int>(top_down_child_pressure_.size()) >= group_size,
+            "TreeNewtonLinearSolver top-down batch workspace is too small.");
+
+        for (int lane = 0; lane < group_size; ++lane)
+        {
+          const int grouped_index = group.begin + lane;
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+          FOUR_C_ASSERT_ALWAYS(inlet_pressure_stamp_[element_index_size] == solve_stamp,
+              "TreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
+              global_element_id_[element_index_size] + 1);
+          top_down_inlet_pressure_[static_cast<std::size_t>(lane)] =
+              inlet_pressure_by_element_[element_index_size];
+        }
+
+        for (int lane = 0; lane < group_size; ++lane)
+        {
+          const int grouped_index = group.begin + lane;
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const auto& element = tree_metadata_.elements[static_cast<std::size_t>(element_index)];
+          set_delta_value(delta, element.global_dof_ids[0],
+              top_down_inlet_pressure_[static_cast<std::size_t>(lane)]);
+        }
+
+        for (int unknown_index = 0; unknown_index < group.block_size; ++unknown_index)
+        {
+          for (int lane = 0; lane < group_size; ++lane)
+          {
+            const int grouped_index = group.begin + lane;
+            const int element_index =
+                grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+            const int unknown_begin = unknown_offset_[static_cast<std::size_t>(element_index)];
+            top_down_unknown_values_[static_cast<std::size_t>(lane)] =
+                workspace_slope_[static_cast<std::size_t>(unknown_begin + unknown_index)] *
+                    top_down_inlet_pressure_[static_cast<std::size_t>(lane)] +
+                workspace_intercept_[static_cast<std::size_t>(unknown_begin + unknown_index)];
+          }
+
+          for (int lane = 0; lane < group_size; ++lane)
+          {
+            const int grouped_index = group.begin + lane;
+            const int element_index =
+                grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+            const int unknown_begin = unknown_offset_[static_cast<std::size_t>(element_index)];
+            set_delta_value(delta,
+                unknown_global_dof_ids_[static_cast<std::size_t>(unknown_begin + unknown_index)],
+                top_down_unknown_values_[static_cast<std::size_t>(lane)]);
+          }
+        }
+
+        if (group.child_count == 0)
+        {
+          return;
+        }
+
+        for (int lane = 0; lane < group_size; ++lane)
+        {
+          const int grouped_index = group.begin + lane;
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+          FOUR_C_ASSERT_ALWAYS(child_interface_count_[element_index_size] > 0,
+              "TreeNewtonLinearSolver found no children while recovering element {}.",
+              global_element_id_[element_index_size] + 1);
+          const int unknown_begin = unknown_offset_[element_index_size];
+          const int outlet_pressure_index = outlet_pressure_unknown_index_[element_index_size];
+          top_down_outlet_pressure_[static_cast<std::size_t>(lane)] =
+              workspace_slope_[static_cast<std::size_t>(unknown_begin + outlet_pressure_index)] *
+                  top_down_inlet_pressure_[static_cast<std::size_t>(lane)] +
+              workspace_intercept_[static_cast<std::size_t>(unknown_begin + outlet_pressure_index)];
+        }
+
+        for (int child_slot = 0; child_slot < group.child_count; ++child_slot)
+        {
+          for (int lane = 0; lane < group_size; ++lane)
+          {
+            const int grouped_index = group.begin + lane;
+            const int element_index =
+                grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+            const int child_interface_index =
+                child_interface_offset_[static_cast<std::size_t>(element_index)] + child_slot;
+            top_down_child_pressure_[static_cast<std::size_t>(lane)] =
+                child_pressure_slope_[static_cast<std::size_t>(child_interface_index)] *
+                    top_down_outlet_pressure_[static_cast<std::size_t>(lane)] +
+                child_pressure_intercept_[static_cast<std::size_t>(child_interface_index)];
+          }
+
+          for (int lane = 0; lane < group_size; ++lane)
+          {
+            const int grouped_index = group.begin + lane;
+            const int element_index =
+                grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+            const int child_interface_index =
+                child_interface_offset_[static_cast<std::size_t>(element_index)] + child_slot;
+            set_inlet_pressure(
+                child_element_index_[static_cast<std::size_t>(child_interface_index)],
+                top_down_child_pressure_[static_cast<std::size_t>(lane)]);
+          }
+        }
+      };
+
       const auto top_down_start = Clock::now();
       for (const auto& layer_groups : top_down_layer_groups_)
       {
         for (const auto& group : layer_groups)
         {
-          for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
-          {
-            const int element_index =
-                grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
-            const std::size_t element_index_size = static_cast<std::size_t>(element_index);
-            FOUR_C_ASSERT_ALWAYS(inlet_pressure_stamp_[element_index_size] == solve_stamp,
-                "TreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
-                global_element_id_[element_index_size] + 1);
-            const double inlet_pressure = inlet_pressure_by_element_[element_index_size];
-            const auto& element = tree_metadata_.elements[element_index_size];
-            const int unknown_begin = unknown_offset_[element_index_size];
-            const int block_size = block_size_[element_index_size];
-
-            set_delta_value(delta, element.global_dof_ids[0], inlet_pressure);
-            for (int i = 0; i < block_size; ++i)
-            {
-              const double value =
-                  workspace_slope_[static_cast<std::size_t>(unknown_begin + i)] * inlet_pressure +
-                  workspace_intercept_[static_cast<std::size_t>(unknown_begin + i)];
-              set_delta_value(delta,
-                  unknown_global_dof_ids_[static_cast<std::size_t>(unknown_begin + i)], value);
-            }
-
-            if (is_leaf_[element_index_size] != 0u)
-            {
-              continue;
-            }
-
-            FOUR_C_ASSERT_ALWAYS(child_interface_count_[element_index_size] > 0,
-                "TreeNewtonLinearSolver found no children while recovering element {}.",
-                global_element_id_[element_index_size] + 1);
-            const int outlet_pressure_index = outlet_pressure_unknown_index_[element_index_size];
-            const double outlet_pressure =
-                workspace_slope_[static_cast<std::size_t>(unknown_begin + outlet_pressure_index)] *
-                    inlet_pressure +
-                workspace_intercept_[static_cast<std::size_t>(
-                    unknown_begin + outlet_pressure_index)];
-            const int child_begin = child_interface_offset_[element_index_size];
-            const int child_end = child_begin + child_interface_count_[element_index_size];
-            for (int child_interface_index = child_begin; child_interface_index < child_end;
-                ++child_interface_index)
-            {
-              set_inlet_pressure(
-                  child_element_index_[static_cast<std::size_t>(child_interface_index)],
-                  child_pressure_slope_[static_cast<std::size_t>(child_interface_index)] *
-                          outlet_pressure +
-                      child_pressure_intercept_[static_cast<std::size_t>(child_interface_index)]);
-            }
-          }
+          recover_top_down_group(group);
         }
       }
       if (profile_ != nullptr)

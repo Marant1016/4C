@@ -160,6 +160,10 @@ namespace ReducedLung
     std::vector<double> batch_3x3_slope1_;
     std::vector<double> batch_3x3_slope2_;
     std::vector<int> batch_3x3_fallback_lanes_;
+    std::vector<double> top_down_inlet_pressure_;
+    std::vector<double> top_down_unknown_values_;
+    std::vector<double> top_down_outlet_pressure_;
+    std::vector<double> top_down_child_pressure_;
     std::vector<std::string> element_context_;
 
     std::vector<double> subtree_relation_G_;
