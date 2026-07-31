@@ -1367,6 +1367,53 @@ namespace ReducedLung
       set_inlet_pressure(tree_metadata_.root_element_index,
           rhs_value(residual, root_boundary_row_) / root_boundary_coeff);
 
+      const auto recover_top_down_element = [&](int element_index)
+      {
+        const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+        FOUR_C_ASSERT_ALWAYS(inlet_pressure_stamp_[element_index_size] == solve_stamp,
+            "TreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
+            global_element_id_[element_index_size] + 1);
+        const double inlet_pressure = inlet_pressure_by_element_[element_index_size];
+        const auto& element = tree_metadata_.elements[element_index_size];
+        set_delta_value(delta, element.global_dof_ids[0], inlet_pressure);
+
+        const int unknown_begin = unknown_offset_[element_index_size];
+        const int element_block_size = block_size_[element_index_size];
+        for (int unknown_index = 0; unknown_index < element_block_size; ++unknown_index)
+        {
+          const double value =
+              workspace_slope_[static_cast<std::size_t>(unknown_begin + unknown_index)] *
+                  inlet_pressure +
+              workspace_intercept_[static_cast<std::size_t>(unknown_begin + unknown_index)];
+          set_delta_value(delta,
+              unknown_global_dof_ids_[static_cast<std::size_t>(unknown_begin + unknown_index)],
+              value);
+        }
+
+        const int child_count = child_interface_count_[element_index_size];
+        if (child_count == 0)
+        {
+          return;
+        }
+
+        const int outlet_pressure_index = outlet_pressure_unknown_index_[element_index_size];
+        const double outlet_pressure =
+            workspace_slope_[static_cast<std::size_t>(unknown_begin + outlet_pressure_index)] *
+                inlet_pressure +
+            workspace_intercept_[static_cast<std::size_t>(unknown_begin + outlet_pressure_index)];
+        const int child_begin = child_interface_offset_[element_index_size];
+        for (int child_slot = 0; child_slot < child_count; ++child_slot)
+        {
+          const int child_interface_index = child_begin + child_slot;
+          const std::size_t child_interface_index_size =
+              static_cast<std::size_t>(child_interface_index);
+          const double child_pressure =
+              child_pressure_slope_[child_interface_index_size] * outlet_pressure +
+              child_pressure_intercept_[child_interface_index_size];
+          set_inlet_pressure(child_element_index_[child_interface_index_size], child_pressure);
+        }
+      };
+
       const auto recover_top_down_group = [&](const ElementGroup& group)
       {
         const int group_size = group.end - group.begin;
@@ -1480,11 +1527,27 @@ namespace ReducedLung
       };
 
       const auto top_down_start = Clock::now();
+      constexpr int top_down_scalar_group_threshold = 2;
       for (const auto& layer_groups : top_down_layer_groups_)
       {
         for (const auto& group : layer_groups)
         {
-          recover_top_down_group(group);
+          const int group_size = group.end - group.begin;
+          FOUR_C_ASSERT_ALWAYS(group_size >= 0,
+              "TreeNewtonLinearSolver top-down group has invalid range [{}, {}).", group.begin,
+              group.end);
+          if (group_size <= top_down_scalar_group_threshold)
+          {
+            for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+            {
+              recover_top_down_element(
+                  grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
+            }
+          }
+          else
+          {
+            recover_top_down_group(group);
+          }
         }
       }
       if (profile_ != nullptr)
