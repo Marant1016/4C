@@ -23,6 +23,13 @@ namespace ReducedLung
 {
   struct TreeNewtonLinearSolverProfile;
 
+  struct TreeCoefficientLocation
+  {
+    int local_row = -1;
+    int local_dof = -1;
+    int structured_entry_index = -1;
+  };
+
   enum class TreeNewtonLinearSolverCoefficientSource
   {
     SparseJacobian,
@@ -82,6 +89,8 @@ namespace ReducedLung
 
     void build_symbolic_plan();
 
+    void resolve_structured_coefficient_locations(const TreeLinearization& tree_linearization);
+
     const ReducedLungTreeMetadata& tree_metadata_;
     double pivot_tolerance_;
     TreeNewtonLinearSolverCoefficientSource coefficient_source_;
@@ -113,6 +122,13 @@ namespace ReducedLung
     std::vector<int> child_inlet_pressure_local_dof_;
     std::vector<int> child_inlet_flow_local_dof_;
     std::vector<int> parent_outlet_pressure_unknown_index_;
+
+    TreeCoefficientLocation root_boundary_coefficient_;
+    std::vector<TreeCoefficientLocation> equation_inlet_pressure_coefficients_;
+    std::vector<TreeCoefficientLocation> matrix_coefficients_;
+    std::vector<TreeCoefficientLocation> child_pressure_parent_coefficients_;
+    std::vector<TreeCoefficientLocation> child_pressure_child_coefficients_;
+    std::vector<TreeCoefficientLocation> child_flow_coefficients_;
 
     std::vector<int> grouped_element_indices_;
     std::vector<std::vector<ElementGroup>> bottom_up_layer_groups_;

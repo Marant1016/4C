@@ -73,6 +73,11 @@ namespace ReducedLung
         return 0.0;
       }
 
+      [[nodiscard]] double value(const TreeCoefficientLocation& location, double tolerance) const
+      {
+        return value(location.local_row, location.local_dof, tolerance);
+      }
+
      private:
       void record_lookup(const Clock::time_point lookup_start) const
       {
@@ -101,15 +106,52 @@ namespace ReducedLung
         (void)tolerance;
         const auto lookup_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
         const double coefficient = linearization_.value(local_row, local_col);
+        record_lookup(lookup_start);
+        return coefficient;
+      }
+
+      [[nodiscard]] double value(const TreeCoefficientLocation& location, double tolerance) const
+      {
+        (void)tolerance;
+        const auto lookup_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
+        FOUR_C_ASSERT_ALWAYS(
+            location.local_row >= 0 && location.local_row < linearization_.num_rows(),
+            "TreeNewtonLinearSolver structured coefficient row {} is outside [0, {}).",
+            location.local_row, linearization_.num_rows());
+        FOUR_C_ASSERT_ALWAYS(
+            location.local_dof >= 0 && location.local_dof < linearization_.num_dofs(),
+            "TreeNewtonLinearSolver structured coefficient dof {} is outside [0, {}).",
+            location.local_dof, linearization_.num_dofs());
+        if (location.structured_entry_index < 0)
+        {
+          record_lookup(lookup_start);
+          return 0.0;
+        }
+
+        const auto& row = linearization_.entries(location.local_row);
+        FOUR_C_ASSERT_ALWAYS(location.structured_entry_index < static_cast<int>(row.size()),
+            "TreeNewtonLinearSolver structured coefficient entry index {} is outside row {} size "
+            "{}.",
+            location.structured_entry_index, location.local_row, row.size());
+        const auto& coefficient = row[static_cast<std::size_t>(location.structured_entry_index)];
+        FOUR_C_ASSERT_ALWAYS(coefficient.first == location.local_dof,
+            "TreeNewtonLinearSolver structured coefficient location for row {} expected dof {} but "
+            "found dof {}.",
+            location.local_row, location.local_dof, coefficient.first);
+        record_lookup(lookup_start);
+        return coefficient.second;
+      }
+
+     private:
+      void record_lookup(const Clock::time_point lookup_start) const
+      {
         if (profile_ != nullptr)
         {
           profile_->coefficient_lookup_time += elapsed_seconds(lookup_start);
           ++profile_->coefficient_lookup_count;
         }
-        return coefficient;
       }
 
-     private:
       const TreeLinearization& linearization_;
       TreeNewtonLinearSolverProfile* profile_ = nullptr;
     };
@@ -175,10 +217,27 @@ namespace ReducedLung
     }
 
     template <typename CoefficientProvider>
+    double matrix_value(const CoefficientProvider& coefficients,
+        const TreeCoefficientLocation& location, double tolerance)
+    {
+      return coefficients.value(location, tolerance);
+    }
+
+    template <typename CoefficientProvider>
     double required_matrix_value(const CoefficientProvider& coefficients, int local_row,
         int local_col, double tolerance, const std::string& context)
     {
       const double value = matrix_value(coefficients, local_row, local_col, tolerance);
+      FOUR_C_ASSERT_ALWAYS(std::abs(value) > tolerance,
+          "TreeNewtonLinearSolver missing or near-zero matrix coefficient for {}.", context);
+      return value;
+    }
+
+    template <typename CoefficientProvider>
+    double required_matrix_value(const CoefficientProvider& coefficients,
+        const TreeCoefficientLocation& location, double tolerance, const std::string& context)
+    {
+      const double value = matrix_value(coefficients, location, tolerance);
       FOUR_C_ASSERT_ALWAYS(std::abs(value) > tolerance,
           "TreeNewtonLinearSolver missing or near-zero matrix coefficient for {}.", context);
       return value;
@@ -694,6 +753,54 @@ namespace ReducedLung
     child_pressure_slope_.assign(child_element_index_.size(), 0.0);
     child_pressure_intercept_.assign(child_element_index_.size(), 0.0);
 
+    root_boundary_coefficient_ = {root_boundary_row_, root_inlet_pressure_local_dof_, -1};
+    equation_inlet_pressure_coefficients_.assign(unknown_global_dof_ids_.size(), {});
+    matrix_coefficients_.assign(static_cast<std::size_t>(matrix_entry_count), {});
+    child_pressure_parent_coefficients_.assign(child_element_index_.size(), {});
+    child_pressure_child_coefficients_.assign(child_element_index_.size(), {});
+    child_flow_coefficients_.assign(child_element_index_.size(), {});
+    for (int element_index = 0; element_index < element_count; ++element_index)
+    {
+      const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+      const int unknown_begin = unknown_offset_[element_index_size];
+      const int equation_begin = equation_offset_[element_index_size];
+      const int matrix_begin = matrix_offset_[element_index_size];
+      const int block_size = block_size_[element_index_size];
+      for (int equation_index = 0; equation_index < block_size; ++equation_index)
+      {
+        const int local_row =
+            equation_rows_[static_cast<std::size_t>(equation_begin + equation_index)];
+        equation_inlet_pressure_coefficients_[static_cast<std::size_t>(
+            unknown_begin + equation_index)] = {
+            local_row, inlet_pressure_local_dof_[element_index_size], -1};
+        for (int unknown_index = 0; unknown_index < block_size; ++unknown_index)
+        {
+          matrix_coefficients_[static_cast<std::size_t>(
+              matrix_begin + equation_index * block_size + unknown_index)] = {local_row,
+              unknown_local_dof_ids_[static_cast<std::size_t>(unknown_begin + unknown_index)], -1};
+        }
+      }
+
+      const int child_begin = child_interface_offset_[element_index_size];
+      for (int child_slot = 0; child_slot < child_interface_count_[element_index_size];
+          ++child_slot)
+      {
+        const int child_interface_index = child_begin + child_slot;
+        const std::size_t child_interface_index_size =
+            static_cast<std::size_t>(child_interface_index);
+        const int flow_row =
+            equation_rows_[static_cast<std::size_t>(equation_begin + block_size - 1)];
+        child_pressure_parent_coefficients_[child_interface_index_size] = {
+            pressure_row_[child_interface_index_size],
+            parent_outlet_pressure_local_dof_[child_interface_index_size], -1};
+        child_pressure_child_coefficients_[child_interface_index_size] = {
+            pressure_row_[child_interface_index_size],
+            child_inlet_pressure_local_dof_[child_interface_index_size], -1};
+        child_flow_coefficients_[child_interface_index_size] = {
+            flow_row, child_inlet_flow_local_dof_[child_interface_index_size], -1};
+      }
+    }
+
     grouped_element_indices_.clear();
     bottom_up_layer_groups_.clear();
     top_down_layer_groups_.clear();
@@ -899,9 +1006,62 @@ namespace ReducedLung
     return NewtonLinearizationType::SparseJacobian;
   }
 
+  void TreeNewtonLinearSolver::resolve_structured_coefficient_locations(
+      const TreeLinearization& tree_linearization)
+  {
+    const auto resolve = [&](TreeCoefficientLocation& location)
+    {
+      FOUR_C_ASSERT_ALWAYS(
+          location.local_row >= 0 && location.local_row < tree_linearization.num_rows(),
+          "TreeNewtonLinearSolver coefficient row {} is outside [0, {}).", location.local_row,
+          tree_linearization.num_rows());
+      FOUR_C_ASSERT_ALWAYS(
+          location.local_dof >= 0 && location.local_dof < tree_linearization.num_dofs(),
+          "TreeNewtonLinearSolver coefficient dof {} is outside [0, {}).", location.local_dof,
+          tree_linearization.num_dofs());
+
+      location.structured_entry_index = -1;
+      const auto& row = tree_linearization.entries(location.local_row);
+      for (int entry_index = 0; entry_index < static_cast<int>(row.size()); ++entry_index)
+      {
+        if (row[static_cast<std::size_t>(entry_index)].first == location.local_dof)
+        {
+          location.structured_entry_index = entry_index;
+          return;
+        }
+      }
+    };
+
+    resolve(root_boundary_coefficient_);
+    for (auto& location : equation_inlet_pressure_coefficients_)
+    {
+      resolve(location);
+    }
+    for (auto& location : matrix_coefficients_)
+    {
+      resolve(location);
+    }
+    for (auto& location : child_pressure_parent_coefficients_)
+    {
+      resolve(location);
+    }
+    for (auto& location : child_pressure_child_coefficients_)
+    {
+      resolve(location);
+    }
+    for (auto& location : child_flow_coefficients_)
+    {
+      resolve(location);
+    }
+  }
+
   void TreeNewtonLinearSolver::set_tree_linearization(const TreeLinearization& tree_linearization)
   {
     tree_linearization_ = &tree_linearization;
+    if (coefficient_source_ == TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks)
+    {
+      resolve_structured_coefficient_locations(tree_linearization);
+    }
   }
 
   void TreeNewtonLinearSolver::solve(Core::LinAlg::SparseMatrix& jacobian,
@@ -948,16 +1108,16 @@ namespace ReducedLung
         workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin + equation_index)] =
             rhs_value(residual, local_row) - rhs_shift;
         workspace_rhs_inlet_pressure_[static_cast<std::size_t>(unknown_begin + equation_index)] =
-            -matrix_value(coefficients, local_row,
-                inlet_pressure_local_dof_[static_cast<std::size_t>(element_index)],
+            -matrix_value(coefficients,
+                equation_inlet_pressure_coefficients_[static_cast<std::size_t>(
+                    unknown_begin + equation_index)],
                 pivot_tolerance_);
 
         for (int i = 0; i < block_size; ++i)
         {
-          workspace_matrix_[static_cast<std::size_t>(matrix_row_offset + i)] =
-              matrix_value(coefficients, local_row,
-                  unknown_local_dof_ids_[static_cast<std::size_t>(unknown_begin + i)],
-                  pivot_tolerance_);
+          workspace_matrix_[static_cast<std::size_t>(matrix_row_offset + i)] = matrix_value(
+              coefficients, matrix_coefficients_[static_cast<std::size_t>(matrix_row_offset + i)],
+              pivot_tolerance_);
         }
       };
 
@@ -987,10 +1147,7 @@ namespace ReducedLung
                 grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
             const std::size_t element_index_size = static_cast<std::size_t>(element_index);
             const int unknown_begin = unknown_offset_[element_index_size];
-            const int equation_begin = equation_offset_[element_index_size];
             const int matrix_begin = matrix_offset_[element_index_size];
-            const int local_row =
-                equation_rows_[static_cast<std::size_t>(equation_begin + equation_index)];
             const int matrix_row_offset = matrix_begin + equation_index * group.block_size;
             double rhs_shift = 0.0;
             const int child_begin = child_interface_offset_[element_index_size];
@@ -1002,14 +1159,12 @@ namespace ReducedLung
               const std::size_t child_element_index =
                   static_cast<std::size_t>(child_element_index_[child_interface_index_size]);
 
-              const double pressure_parent_coeff =
-                  required_matrix_value(coefficients, pressure_row_[child_interface_index_size],
-                      parent_outlet_pressure_local_dof_[child_interface_index_size],
-                      pivot_tolerance_, "pressure-continuity parent pressure");
-              const double pressure_child_coeff =
-                  required_matrix_value(coefficients, pressure_row_[child_interface_index_size],
-                      child_inlet_pressure_local_dof_[child_interface_index_size], pivot_tolerance_,
-                      "pressure-continuity child pressure");
+              const double pressure_parent_coeff = required_matrix_value(coefficients,
+                  child_pressure_parent_coefficients_[child_interface_index_size], pivot_tolerance_,
+                  "pressure-continuity parent pressure");
+              const double pressure_child_coeff = required_matrix_value(coefficients,
+                  child_pressure_child_coefficients_[child_interface_index_size], pivot_tolerance_,
+                  "pressure-continuity child pressure");
               const double pressure_rhs =
                   rhs_value(residual, pressure_row_[child_interface_index_size]);
 
@@ -1024,8 +1179,8 @@ namespace ReducedLung
                   subtree_relation_G_[child_element_index] * child_pressure_intercept +
                   subtree_relation_h_[child_element_index];
 
-              const double flow_child_coeff = required_matrix_value(coefficients, local_row,
-                  child_inlet_flow_local_dof_[child_interface_index_size], pivot_tolerance_,
+              const double flow_child_coeff = required_matrix_value(coefficients,
+                  child_flow_coefficients_[child_interface_index_size], pivot_tolerance_,
                   "junction flow child-flow coefficient");
 
               const std::size_t parent_outlet_pressure_index = static_cast<std::size_t>(
@@ -1158,8 +1313,8 @@ namespace ReducedLung
         inlet_pressure_stamp_[element_index_size] = solve_stamp;
       };
 
-      const double root_boundary_coeff = required_matrix_value(coefficients, root_boundary_row_,
-          root_inlet_pressure_local_dof_, pivot_tolerance_, "root inlet boundary");
+      const double root_boundary_coeff = required_matrix_value(
+          coefficients, root_boundary_coefficient_, pivot_tolerance_, "root inlet boundary");
       set_inlet_pressure(tree_metadata_.root_element_index,
           rhs_value(residual, root_boundary_row_) / root_boundary_coeff);
 
