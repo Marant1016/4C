@@ -125,6 +125,19 @@ namespace ReducedLung
     std::vector<double> workspace_slope_;
     std::vector<double> child_pressure_slope_;
     std::vector<double> child_pressure_intercept_;
+    std::vector<double> batch_2x2_a00_;
+    std::vector<double> batch_2x2_a01_;
+    std::vector<double> batch_2x2_a10_;
+    std::vector<double> batch_2x2_a11_;
+    std::vector<double> batch_2x2_rhs_constant0_;
+    std::vector<double> batch_2x2_rhs_constant1_;
+    std::vector<double> batch_2x2_rhs_inlet_pressure0_;
+    std::vector<double> batch_2x2_rhs_inlet_pressure1_;
+    std::vector<double> batch_2x2_intercept0_;
+    std::vector<double> batch_2x2_intercept1_;
+    std::vector<double> batch_2x2_slope0_;
+    std::vector<double> batch_2x2_slope1_;
+    std::vector<int> batch_2x2_fallback_lanes_;
     std::vector<std::string> element_context_;
 
     std::vector<double> subtree_relation_G_;

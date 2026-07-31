@@ -261,6 +261,104 @@ namespace ReducedLung
       }
     }
 
+    void solve_2x2_batch(int group_begin, int group_end,
+        const std::vector<int>& grouped_element_indices, const std::vector<int>& unknown_offset,
+        const std::vector<int>& matrix_offset, std::vector<double>& matrix,
+        std::vector<double>& rhs_constant, std::vector<double>& rhs_inlet_pressure,
+        std::vector<double>& intercept, std::vector<double>& slope, std::vector<double>& a00,
+        std::vector<double>& a01, std::vector<double>& a10, std::vector<double>& a11,
+        std::vector<double>& rhs_constant0, std::vector<double>& rhs_constant1,
+        std::vector<double>& rhs_inlet_pressure0, std::vector<double>& rhs_inlet_pressure1,
+        std::vector<double>& intercept0, std::vector<double>& intercept1,
+        std::vector<double>& slope0, std::vector<double>& slope1, std::vector<int>& fallback_lanes,
+        double pivot_tolerance, const std::vector<std::string>& element_context)
+    {
+      const int group_size = group_end - group_begin;
+      FOUR_C_ASSERT_ALWAYS(group_size >= 0, "TreeNewtonLinearSolver 2x2 batch has invalid range.");
+      FOUR_C_ASSERT_ALWAYS(static_cast<int>(a00.size()) >= group_size &&
+                               static_cast<int>(a01.size()) >= group_size &&
+                               static_cast<int>(a10.size()) >= group_size &&
+                               static_cast<int>(a11.size()) >= group_size &&
+                               static_cast<int>(rhs_constant0.size()) >= group_size &&
+                               static_cast<int>(rhs_constant1.size()) >= group_size &&
+                               static_cast<int>(rhs_inlet_pressure0.size()) >= group_size &&
+                               static_cast<int>(rhs_inlet_pressure1.size()) >= group_size &&
+                               static_cast<int>(intercept0.size()) >= group_size &&
+                               static_cast<int>(intercept1.size()) >= group_size &&
+                               static_cast<int>(slope0.size()) >= group_size &&
+                               static_cast<int>(slope1.size()) >= group_size &&
+                               static_cast<int>(fallback_lanes.size()) >= group_size,
+          "TreeNewtonLinearSolver 2x2 batch workspace is too small.");
+
+      for (int lane = 0; lane < group_size; ++lane)
+      {
+        const int element_index =
+            grouped_element_indices[static_cast<std::size_t>(group_begin + lane)];
+        const int unknown_begin = unknown_offset[static_cast<std::size_t>(element_index)];
+        const int matrix_begin = matrix_offset[static_cast<std::size_t>(element_index)];
+        const std::size_t lane_index = static_cast<std::size_t>(lane);
+        a00[lane_index] = matrix[static_cast<std::size_t>(matrix_begin)];
+        a01[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 1)];
+        a10[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 2)];
+        a11[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 3)];
+        rhs_constant0[lane_index] = rhs_constant[static_cast<std::size_t>(unknown_begin)];
+        rhs_constant1[lane_index] = rhs_constant[static_cast<std::size_t>(unknown_begin + 1)];
+        rhs_inlet_pressure0[lane_index] =
+            rhs_inlet_pressure[static_cast<std::size_t>(unknown_begin)];
+        rhs_inlet_pressure1[lane_index] =
+            rhs_inlet_pressure[static_cast<std::size_t>(unknown_begin + 1)];
+      }
+
+      int fallback_count = 0;
+      for (int lane = 0; lane < group_size; ++lane)
+      {
+        const std::size_t lane_index = static_cast<std::size_t>(lane);
+        const double determinant =
+            a00[lane_index] * a11[lane_index] - a01[lane_index] * a10[lane_index];
+        if (!std::isfinite(determinant) || std::abs(determinant) <= pivot_tolerance)
+        {
+          fallback_lanes[static_cast<std::size_t>(fallback_count)] = lane;
+          ++fallback_count;
+          continue;
+        }
+
+        const double inverse_determinant = 1.0 / determinant;
+        intercept0[lane_index] = (rhs_constant0[lane_index] * a11[lane_index] -
+                                     a01[lane_index] * rhs_constant1[lane_index]) *
+                                 inverse_determinant;
+        intercept1[lane_index] = (a00[lane_index] * rhs_constant1[lane_index] -
+                                     rhs_constant0[lane_index] * a10[lane_index]) *
+                                 inverse_determinant;
+        slope0[lane_index] = (rhs_inlet_pressure0[lane_index] * a11[lane_index] -
+                                 a01[lane_index] * rhs_inlet_pressure1[lane_index]) *
+                             inverse_determinant;
+        slope1[lane_index] = (a00[lane_index] * rhs_inlet_pressure1[lane_index] -
+                                 rhs_inlet_pressure0[lane_index] * a10[lane_index]) *
+                             inverse_determinant;
+
+        const int element_index =
+            grouped_element_indices[static_cast<std::size_t>(group_begin + lane)];
+        const int unknown_begin = unknown_offset[static_cast<std::size_t>(element_index)];
+        intercept[static_cast<std::size_t>(unknown_begin)] = intercept0[lane_index];
+        intercept[static_cast<std::size_t>(unknown_begin + 1)] = intercept1[lane_index];
+        slope[static_cast<std::size_t>(unknown_begin)] = slope0[lane_index];
+        slope[static_cast<std::size_t>(unknown_begin + 1)] = slope1[lane_index];
+      }
+
+      for (int fallback_index = 0; fallback_index < fallback_count; ++fallback_index)
+      {
+        const int lane = fallback_lanes[static_cast<std::size_t>(fallback_index)];
+        const int element_index =
+            grouped_element_indices[static_cast<std::size_t>(group_begin + lane)];
+        const int unknown_begin = unknown_offset[static_cast<std::size_t>(element_index)];
+        const int matrix_begin = matrix_offset[static_cast<std::size_t>(element_index)];
+        solve_dense_system(matrix.data() + matrix_begin, rhs_constant.data() + unknown_begin,
+            rhs_inlet_pressure.data() + unknown_begin, intercept.data() + unknown_begin,
+            slope.data() + unknown_begin, 2, pivot_tolerance,
+            element_context[static_cast<std::size_t>(element_index)]);
+      }
+    }
+
     int unknown_index_for_global_dof(const std::vector<int>& unknown_global_dof_ids,
         int unknown_begin, int unknown_end, int global_dof_id)
     {
@@ -567,6 +665,31 @@ namespace ReducedLung
           "TreeNewtonLinearSolver top-down recovery writes correction dof {} {} times.",
           global_dof_id, correction_dof_visit_count[static_cast<std::size_t>(global_dof_id)]);
     }
+
+    int max_2x2_group_size = 0;
+    for (const auto& layer_groups : bottom_up_layer_groups_)
+    {
+      for (const auto& group : layer_groups)
+      {
+        if (group.block_size == 2)
+        {
+          max_2x2_group_size = std::max(max_2x2_group_size, group.end - group.begin);
+        }
+      }
+    }
+    batch_2x2_a00_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_a01_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_a10_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_a11_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_rhs_constant0_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_rhs_constant1_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_rhs_inlet_pressure0_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_rhs_inlet_pressure1_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_intercept0_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_intercept1_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_slope0_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_slope1_.assign(static_cast<std::size_t>(max_2x2_group_size), 0.0);
+    batch_2x2_fallback_lanes_.assign(static_cast<std::size_t>(max_2x2_group_size), 0);
   }
 
   NewtonLinearizationType TreeNewtonLinearSolver::linearization_type() const
@@ -645,6 +768,107 @@ namespace ReducedLung
       }
     };
 
+    const auto assemble_element = [&](int element_index)
+    {
+      const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+      const int unknown_begin = unknown_offset_[element_index_size];
+      const int equation_begin = equation_offset_[element_index_size];
+      const int matrix_begin = matrix_offset_[element_index_size];
+      const int block_size = block_size_[element_index_size];
+
+      for (int equation_index = 0; equation_index < block_size; ++equation_index)
+      {
+        const int local_row =
+            equation_rows_[static_cast<std::size_t>(equation_begin + equation_index)];
+        add_equation_row(element_index, equation_index, local_row, 0.0);
+
+        const bool is_downstream_flow_equation =
+            is_leaf_[element_index_size] == 0u && equation_index + 1 == block_size;
+        if (!is_downstream_flow_equation)
+        {
+          continue;
+        }
+
+        const int matrix_row_offset = matrix_begin + equation_index * block_size;
+        double rhs_shift = 0.0;
+        const int child_begin = child_interface_offset_[element_index_size];
+        const int child_end = child_begin + child_interface_count_[element_index_size];
+        for (int child_interface_index = child_begin; child_interface_index < child_end;
+            ++child_interface_index)
+        {
+          const std::size_t child_element_index = static_cast<std::size_t>(
+              child_element_index_[static_cast<std::size_t>(child_interface_index)]);
+
+          const double pressure_parent_coeff = required_matrix_value(*coefficients,
+              pressure_row_[static_cast<std::size_t>(child_interface_index)],
+              parent_outlet_pressure_local_dof_[static_cast<std::size_t>(child_interface_index)],
+              pivot_tolerance_, "pressure-continuity parent pressure");
+          const double pressure_child_coeff = required_matrix_value(*coefficients,
+              pressure_row_[static_cast<std::size_t>(child_interface_index)],
+              child_inlet_pressure_local_dof_[static_cast<std::size_t>(child_interface_index)],
+              pivot_tolerance_, "pressure-continuity child pressure");
+          const double pressure_rhs =
+              rhs_value(residual, pressure_row_[static_cast<std::size_t>(child_interface_index)]);
+
+          const double child_pressure_slope = -pressure_parent_coeff / pressure_child_coeff;
+          const double child_pressure_intercept = pressure_rhs / pressure_child_coeff;
+          child_pressure_slope_[static_cast<std::size_t>(child_interface_index)] =
+              child_pressure_slope;
+          child_pressure_intercept_[static_cast<std::size_t>(child_interface_index)] =
+              child_pressure_intercept;
+
+          const double child_flow_slope =
+              subtree_relation_G_[child_element_index] * child_pressure_slope;
+          const double child_flow_intercept =
+              subtree_relation_G_[child_element_index] * child_pressure_intercept +
+              subtree_relation_h_[child_element_index];
+
+          const double flow_child_coeff = required_matrix_value(*coefficients, local_row,
+              child_inlet_flow_local_dof_[static_cast<std::size_t>(child_interface_index)],
+              pivot_tolerance_, "junction flow child-flow coefficient");
+
+          const std::size_t parent_outlet_pressure_index = static_cast<std::size_t>(
+              parent_outlet_pressure_unknown_index_[static_cast<std::size_t>(
+                  child_interface_index)]);
+          workspace_matrix_[static_cast<std::size_t>(matrix_row_offset) +
+                            parent_outlet_pressure_index] += flow_child_coeff * child_flow_slope;
+          rhs_shift += flow_child_coeff * child_flow_intercept;
+        }
+
+        workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin + equation_index)] -=
+            rhs_shift;
+      }
+    };
+
+    const auto solve_scalar_element = [&](int element_index)
+    {
+      const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+      const int unknown_begin = unknown_offset_[element_index_size];
+      const int matrix_begin = matrix_offset_[element_index_size];
+      const int block_size = block_size_[element_index_size];
+      const auto dense_solve_start = Clock::now();
+      solve_dense_system(workspace_matrix_.data() + matrix_begin,
+          workspace_rhs_constant_.data() + unknown_begin,
+          workspace_rhs_inlet_pressure_.data() + unknown_begin,
+          workspace_intercept_.data() + unknown_begin, workspace_slope_.data() + unknown_begin,
+          block_size, pivot_tolerance_, element_context_[element_index_size]);
+      if (profile_ != nullptr)
+      {
+        profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
+        ++profile_->dense_solve_count;
+      }
+    };
+
+    const auto write_subtree_relation = [&](int element_index)
+    {
+      const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+      const int unknown_begin = unknown_offset_[element_index_size];
+      subtree_relation_G_[element_index_size] = workspace_slope_[static_cast<std::size_t>(
+          unknown_begin + inlet_flow_unknown_index_[element_index_size])];
+      subtree_relation_h_[element_index_size] = workspace_intercept_[static_cast<std::size_t>(
+          unknown_begin + inlet_flow_unknown_index_[element_index_size])];
+    };
+
     const auto bottom_up_start = Clock::now();
     for (const auto& layer_groups : bottom_up_layer_groups_)
     {
@@ -652,97 +876,37 @@ namespace ReducedLung
       {
         for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
         {
-          const int element_index =
-              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
-          const std::size_t element_index_size = static_cast<std::size_t>(element_index);
-          const int unknown_begin = unknown_offset_[element_index_size];
-          const int equation_begin = equation_offset_[element_index_size];
-          const int matrix_begin = matrix_offset_[element_index_size];
-          const int block_size = block_size_[element_index_size];
+          assemble_element(grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
+        }
 
-          for (int equation_index = 0; equation_index < block_size; ++equation_index)
-          {
-            const int local_row =
-                equation_rows_[static_cast<std::size_t>(equation_begin + equation_index)];
-            add_equation_row(element_index, equation_index, local_row, 0.0);
-
-            const bool is_downstream_flow_equation =
-                is_leaf_[element_index_size] == 0u && equation_index + 1 == block_size;
-            if (!is_downstream_flow_equation)
-            {
-              continue;
-            }
-
-            const int matrix_row_offset = matrix_begin + equation_index * block_size;
-            double rhs_shift = 0.0;
-            const int child_begin = child_interface_offset_[element_index_size];
-            const int child_end = child_begin + child_interface_count_[element_index_size];
-            for (int child_interface_index = child_begin; child_interface_index < child_end;
-                ++child_interface_index)
-            {
-              const std::size_t child_element_index = static_cast<std::size_t>(
-                  child_element_index_[static_cast<std::size_t>(child_interface_index)]);
-
-              const double pressure_parent_coeff = required_matrix_value(*coefficients,
-                  pressure_row_[static_cast<std::size_t>(child_interface_index)],
-                  parent_outlet_pressure_local_dof_[static_cast<std::size_t>(
-                      child_interface_index)],
-                  pivot_tolerance_, "pressure-continuity parent pressure");
-              const double pressure_child_coeff = required_matrix_value(*coefficients,
-                  pressure_row_[static_cast<std::size_t>(child_interface_index)],
-                  child_inlet_pressure_local_dof_[static_cast<std::size_t>(child_interface_index)],
-                  pivot_tolerance_, "pressure-continuity child pressure");
-              const double pressure_rhs = rhs_value(
-                  residual, pressure_row_[static_cast<std::size_t>(child_interface_index)]);
-
-              const double child_pressure_slope = -pressure_parent_coeff / pressure_child_coeff;
-              const double child_pressure_intercept = pressure_rhs / pressure_child_coeff;
-              child_pressure_slope_[static_cast<std::size_t>(child_interface_index)] =
-                  child_pressure_slope;
-              child_pressure_intercept_[static_cast<std::size_t>(child_interface_index)] =
-                  child_pressure_intercept;
-
-              const double child_flow_slope =
-                  subtree_relation_G_[child_element_index] * child_pressure_slope;
-              const double child_flow_intercept =
-                  subtree_relation_G_[child_element_index] * child_pressure_intercept +
-                  subtree_relation_h_[child_element_index];
-
-              const double flow_child_coeff = required_matrix_value(*coefficients, local_row,
-                  child_inlet_flow_local_dof_[static_cast<std::size_t>(child_interface_index)],
-                  pivot_tolerance_, "junction flow child-flow coefficient");
-
-              const std::size_t parent_outlet_pressure_index = static_cast<std::size_t>(
-                  parent_outlet_pressure_unknown_index_[static_cast<std::size_t>(
-                      child_interface_index)]);
-              workspace_matrix_[static_cast<std::size_t>(matrix_row_offset) +
-                                parent_outlet_pressure_index] +=
-                  flow_child_coeff * child_flow_slope;
-              rhs_shift += flow_child_coeff * child_flow_intercept;
-            }
-
-            workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin + equation_index)] -=
-                rhs_shift;
-          }
-
+        if (group.block_size == 2)
+        {
           const auto dense_solve_start = Clock::now();
-          solve_dense_system(workspace_matrix_.data() + matrix_begin,
-              workspace_rhs_constant_.data() + unknown_begin,
-              workspace_rhs_inlet_pressure_.data() + unknown_begin,
-              workspace_intercept_.data() + unknown_begin, workspace_slope_.data() + unknown_begin,
-              block_size, pivot_tolerance_, element_context_[element_index_size]);
+          solve_2x2_batch(group.begin, group.end, grouped_element_indices_, unknown_offset_,
+              matrix_offset_, workspace_matrix_, workspace_rhs_constant_,
+              workspace_rhs_inlet_pressure_, workspace_intercept_, workspace_slope_, batch_2x2_a00_,
+              batch_2x2_a01_, batch_2x2_a10_, batch_2x2_a11_, batch_2x2_rhs_constant0_,
+              batch_2x2_rhs_constant1_, batch_2x2_rhs_inlet_pressure0_,
+              batch_2x2_rhs_inlet_pressure1_, batch_2x2_intercept0_, batch_2x2_intercept1_,
+              batch_2x2_slope0_, batch_2x2_slope1_, batch_2x2_fallback_lanes_, pivot_tolerance_,
+              element_context_);
           if (profile_ != nullptr)
           {
             profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
-            ++profile_->dense_solve_count;
+            profile_->dense_solve_count += static_cast<std::uint64_t>(group.end - group.begin);
           }
+        }
+        else
+        {
+          for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+          {
+            solve_scalar_element(grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
+          }
+        }
 
-          subtree_relation_G_[static_cast<std::size_t>(element_index)] =
-              workspace_slope_[static_cast<std::size_t>(
-                  unknown_begin + inlet_flow_unknown_index_[element_index_size])];
-          subtree_relation_h_[static_cast<std::size_t>(element_index)] =
-              workspace_intercept_[static_cast<std::size_t>(
-                  unknown_begin + inlet_flow_unknown_index_[element_index_size])];
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          write_subtree_relation(grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
         }
       }
     }
