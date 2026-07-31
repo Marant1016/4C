@@ -130,6 +130,8 @@ namespace ReducedLung
     std::vector<double> subtree_relation_G_;
     std::vector<double> subtree_relation_h_;
     std::vector<double> inlet_pressure_by_element_;
+    std::vector<int> inlet_pressure_stamp_;
+    int current_solve_stamp_ = 0;
   };
 
   /**

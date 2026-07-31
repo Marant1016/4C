@@ -326,6 +326,8 @@ namespace ReducedLung
     subtree_relation_h_.assign(static_cast<std::size_t>(element_count), 0.0);
     inlet_pressure_by_element_.assign(
         static_cast<std::size_t>(element_count), std::numeric_limits<double>::quiet_NaN());
+    inlet_pressure_stamp_.assign(static_cast<std::size_t>(element_count), 0);
+    current_solve_stamp_ = 0;
     if (profile_ != nullptr)
     {
       profile_->element_count = 0;
@@ -504,6 +506,67 @@ namespace ReducedLung
     };
     build_layer_groups(tree_metadata_.bottom_up_layers, bottom_up_layer_groups_);
     build_layer_groups(tree_metadata_.top_down_layers, top_down_layer_groups_);
+
+    const auto validate_grouped_traversal =
+        [&](const std::vector<std::vector<ElementGroup>>& groups, const std::string& traversal_name)
+    {
+      std::vector<int> visit_count(static_cast<std::size_t>(element_count), 0);
+      for (const auto& layer_groups : groups)
+      {
+        for (const auto& group : layer_groups)
+        {
+          FOUR_C_ASSERT_ALWAYS(
+              group.begin >= 0 && group.end >= group.begin &&
+                  static_cast<std::size_t>(group.end) <= grouped_element_indices_.size(),
+              "TreeNewtonLinearSolver {} group has invalid range [{}, {}).", traversal_name,
+              group.begin, group.end);
+          for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+          {
+            const int element_index =
+                grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+            FOUR_C_ASSERT_ALWAYS(element_index >= 0 && element_index < element_count,
+                "TreeNewtonLinearSolver {} group references invalid element index {}.",
+                traversal_name, element_index);
+            const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+            FOUR_C_ASSERT_ALWAYS(
+                group.block_size == block_size_[element_index_size] &&
+                    group.child_count == child_interface_count_[element_index_size],
+                "TreeNewtonLinearSolver {} group shape does not match element {}.", traversal_name,
+                global_element_id_[element_index_size] + 1);
+            ++visit_count[element_index_size];
+          }
+        }
+      }
+
+      for (int element_index = 0; element_index < element_count; ++element_index)
+      {
+        FOUR_C_ASSERT_ALWAYS(visit_count[static_cast<std::size_t>(element_index)] == 1,
+            "TreeNewtonLinearSolver {} grouped traversal visits element {} {} times.",
+            traversal_name, global_element_id_[static_cast<std::size_t>(element_index)] + 1,
+            visit_count[static_cast<std::size_t>(element_index)]);
+      }
+    };
+    validate_grouped_traversal(bottom_up_layer_groups_, "bottom-up");
+    validate_grouped_traversal(top_down_layer_groups_, "top-down");
+
+    std::vector<int> correction_dof_visit_count(
+        static_cast<std::size_t>(tree_metadata_.num_global_dofs), 0);
+    for (const auto& element : tree_metadata_.elements)
+    {
+      for (const int global_dof_id : element.global_dof_ids)
+      {
+        FOUR_C_ASSERT_ALWAYS(global_dof_id >= 0 && global_dof_id < tree_metadata_.num_global_dofs,
+            "TreeNewtonLinearSolver correction dof {} is outside [0, {}).", global_dof_id,
+            tree_metadata_.num_global_dofs);
+        ++correction_dof_visit_count[static_cast<std::size_t>(global_dof_id)];
+      }
+    }
+    for (int global_dof_id = 0; global_dof_id < tree_metadata_.num_global_dofs; ++global_dof_id)
+    {
+      FOUR_C_ASSERT_ALWAYS(correction_dof_visit_count[static_cast<std::size_t>(global_dof_id)] == 1,
+          "TreeNewtonLinearSolver top-down recovery writes correction dof {} {} times.",
+          global_dof_id, correction_dof_visit_count[static_cast<std::size_t>(global_dof_id)]);
+    }
   }
 
   NewtonLinearizationType TreeNewtonLinearSolver::linearization_type() const
@@ -552,8 +615,6 @@ namespace ReducedLung
     FOUR_C_ASSERT_ALWAYS(delta.local_length() == tree_metadata_.num_global_dofs,
         "TreeNewtonLinearSolver requires all correction dofs to be locally available.");
 
-    delta.put_scalar(0.0);
-
     SparseTreeCoefficientProvider sparse_coefficients(jacobian, profile_);
     std::optional<StructuredTreeCoefficientProvider> structured_coefficients;
     const TreeCoefficientProvider* coefficients = &sparse_coefficients;
@@ -583,9 +644,6 @@ namespace ReducedLung
             unknown_local_dof_ids_[static_cast<std::size_t>(unknown_begin + i)], pivot_tolerance_);
       }
     };
-
-    std::fill(subtree_relation_G_.begin(), subtree_relation_G_.end(), 0.0);
-    std::fill(subtree_relation_h_.begin(), subtree_relation_h_.end(), 0.0);
 
     const auto bottom_up_start = Clock::now();
     for (const auto& layer_groups : bottom_up_layer_groups_)
@@ -693,12 +751,29 @@ namespace ReducedLung
       profile_->bottom_up_time += elapsed_seconds(bottom_up_start);
     }
 
-    std::fill(inlet_pressure_by_element_.begin(), inlet_pressure_by_element_.end(),
-        std::numeric_limits<double>::quiet_NaN());
+    if (current_solve_stamp_ == std::numeric_limits<int>::max())
+    {
+      std::fill(inlet_pressure_stamp_.begin(), inlet_pressure_stamp_.end(), 0);
+      current_solve_stamp_ = 0;
+    }
+    ++current_solve_stamp_;
+    const int solve_stamp = current_solve_stamp_;
+
+    const auto set_inlet_pressure = [&](int element_index, double value)
+    {
+      const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+      FOUR_C_ASSERT_ALWAYS(inlet_pressure_stamp_[element_index_size] != solve_stamp,
+          "TreeNewtonLinearSolver inlet-pressure correction for element {} was written more than "
+          "once.",
+          global_element_id_[element_index_size] + 1);
+      inlet_pressure_by_element_[element_index_size] = value;
+      inlet_pressure_stamp_[element_index_size] = solve_stamp;
+    };
+
     const double root_boundary_coeff = required_matrix_value(*coefficients, root_boundary_row_,
         root_inlet_pressure_local_dof_, pivot_tolerance_, "root inlet boundary");
-    inlet_pressure_by_element_[static_cast<std::size_t>(tree_metadata_.root_element_index)] =
-        rhs_value(residual, root_boundary_row_) / root_boundary_coeff;
+    set_inlet_pressure(tree_metadata_.root_element_index,
+        rhs_value(residual, root_boundary_row_) / root_boundary_coeff);
 
     const auto top_down_start = Clock::now();
     for (const auto& layer_groups : top_down_layer_groups_)
@@ -710,10 +785,10 @@ namespace ReducedLung
           const int element_index =
               grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
           const std::size_t element_index_size = static_cast<std::size_t>(element_index);
-          const double inlet_pressure = inlet_pressure_by_element_[element_index_size];
-          FOUR_C_ASSERT_ALWAYS(!std::isnan(inlet_pressure),
+          FOUR_C_ASSERT_ALWAYS(inlet_pressure_stamp_[element_index_size] == solve_stamp,
               "TreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
               global_element_id_[element_index_size] + 1);
+          const double inlet_pressure = inlet_pressure_by_element_[element_index_size];
           const auto& element = tree_metadata_.elements[element_index_size];
           const int unknown_begin = unknown_offset_[element_index_size];
           const int block_size = block_size_[element_index_size];
@@ -746,11 +821,11 @@ namespace ReducedLung
           for (int child_interface_index = child_begin; child_interface_index < child_end;
               ++child_interface_index)
           {
-            inlet_pressure_by_element_[static_cast<std::size_t>(
-                child_element_index_[static_cast<std::size_t>(child_interface_index)])] =
+            set_inlet_pressure(
+                child_element_index_[static_cast<std::size_t>(child_interface_index)],
                 child_pressure_slope_[static_cast<std::size_t>(child_interface_index)] *
-                    outlet_pressure +
-                child_pressure_intercept_[static_cast<std::size_t>(child_interface_index)];
+                        outlet_pressure +
+                    child_pressure_intercept_[static_cast<std::size_t>(child_interface_index)]);
           }
         }
       }
