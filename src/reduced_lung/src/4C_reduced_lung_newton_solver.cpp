@@ -198,7 +198,16 @@ namespace ReducedLung
   void NewtonSolver::assemble_tree_linearization_for_current_state()
   {
     const auto assembly_start = Clock::now();
-    tree_linearization_.reset(residual_.local_length(), locally_relevant_dofs_.local_length());
+    const int num_rows = residual_.local_length();
+    const int num_dofs = locally_relevant_dofs_.local_length();
+    if (tree_linearization_.num_rows() == num_rows && tree_linearization_.num_dofs() == num_dofs)
+    {
+      tree_linearization_.clear_values();
+    }
+    else
+    {
+      tree_linearization_.reset(num_rows, num_dofs);
+    }
     for (const auto& assemble_tree_linearization : assembly_pipeline_.tree_linearization_assemblers)
     {
       assemble_tree_linearization(tree_linearization_, locally_relevant_dofs_, current_time_, dt_);

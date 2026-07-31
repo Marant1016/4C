@@ -1061,8 +1061,18 @@ namespace ReducedLung
           "TreeNewtonLinearSolver coefficient dof {} is outside [0, {}).", location.local_dof,
           tree_linearization.num_dofs());
 
-      location.structured_entry_index = -1;
       const auto& row = tree_linearization.entries(location.local_row);
+      if (location.structured_entry_index >= 0 &&
+          location.structured_entry_index < static_cast<int>(row.size()))
+      {
+        const auto& coefficient = row[static_cast<std::size_t>(location.structured_entry_index)];
+        if (coefficient.first == location.local_dof)
+        {
+          return coefficient.second;
+        }
+      }
+
+      location.structured_entry_index = -1;
       for (int entry_index = 0; entry_index < static_cast<int>(row.size()); ++entry_index)
       {
         if (row[static_cast<std::size_t>(entry_index)].first == location.local_dof)
