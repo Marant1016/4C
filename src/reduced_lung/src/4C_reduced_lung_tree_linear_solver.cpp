@@ -621,10 +621,6 @@ namespace ReducedLung
       return static_cast<int>(std::distance(first, it));
     }
 
-    void set_delta_value(Core::LinAlg::Vector<double>& delta, int global_dof_id, double value)
-    {
-      delta.replace_global_value(global_dof_id, value);
-    }
   }  // namespace
 
   TreeNewtonLinearSolver::TreeNewtonLinearSolver(const TreeNewtonLinearSolverContext& context)
@@ -665,6 +661,9 @@ namespace ReducedLung
     unknown_global_dof_ids_.clear();
     unknown_local_dof_ids_.clear();
     equation_rows_.clear();
+    inlet_pressure_correction_local_dof_ids_.clear();
+    unknown_correction_local_dof_ids_.clear();
+    correction_local_dof_ids_initialized_ = false;
     child_element_index_.clear();
     pressure_row_.clear();
     parent_outlet_pressure_local_dof_.clear();
@@ -1150,6 +1149,34 @@ namespace ReducedLung
     FOUR_C_ASSERT_ALWAYS(delta.local_length() == tree_metadata_.num_global_dofs,
         "TreeNewtonLinearSolver requires all correction dofs to be locally available.");
 
+    if (!correction_local_dof_ids_initialized_)
+    {
+      const auto& correction_map = delta.get_map();
+      const auto resolve_correction_local_dof = [&](int global_dof_id)
+      {
+        const int local_dof_id = correction_map.lid(global_dof_id);
+        FOUR_C_ASSERT_ALWAYS(local_dof_id >= 0 && local_dof_id < delta.local_length(),
+            "TreeNewtonLinearSolver correction dof {} is not locally available.", global_dof_id);
+        return local_dof_id;
+      };
+
+      inlet_pressure_correction_local_dof_ids_.assign(tree_metadata_.elements.size(), -1);
+      for (std::size_t element_index = 0; element_index < tree_metadata_.elements.size();
+          ++element_index)
+      {
+        inlet_pressure_correction_local_dof_ids_[element_index] =
+            resolve_correction_local_dof(tree_metadata_.elements[element_index].global_dof_ids[0]);
+      }
+      unknown_correction_local_dof_ids_.assign(unknown_global_dof_ids_.size(), -1);
+      for (std::size_t unknown_index = 0; unknown_index < unknown_global_dof_ids_.size();
+          ++unknown_index)
+      {
+        unknown_correction_local_dof_ids_[unknown_index] =
+            resolve_correction_local_dof(unknown_global_dof_ids_[unknown_index]);
+      }
+      correction_local_dof_ids_initialized_ = true;
+    }
+
     const auto solve_with_coefficients = [&](const auto& coefficients)
     {
       const auto add_equation_row =
@@ -1606,6 +1633,10 @@ namespace ReducedLung
       set_inlet_pressure(tree_metadata_.root_element_index,
           rhs_value(residual, root_boundary_row_) / root_boundary_coeff);
 
+      double* const delta_values = delta.get_values();
+      const auto set_delta_local_value = [&](int local_dof_id, double value)
+      { delta_values[static_cast<std::size_t>(local_dof_id)] = value; };
+
       const auto recover_top_down_element = [&](int element_index)
       {
         const std::size_t element_index_size = static_cast<std::size_t>(element_index);
@@ -1613,8 +1644,8 @@ namespace ReducedLung
             "TreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
             global_element_id_[element_index_size] + 1);
         const double inlet_pressure = inlet_pressure_by_element_[element_index_size];
-        const auto& element = tree_metadata_.elements[element_index_size];
-        set_delta_value(delta, element.global_dof_ids[0], inlet_pressure);
+        set_delta_local_value(
+            inlet_pressure_correction_local_dof_ids_[element_index_size], inlet_pressure);
 
         const int unknown_begin = unknown_offset_[element_index_size];
         const int element_block_size = block_size_[element_index_size];
@@ -1624,8 +1655,8 @@ namespace ReducedLung
               workspace_slope_[static_cast<std::size_t>(unknown_begin + unknown_index)] *
                   inlet_pressure +
               workspace_intercept_[static_cast<std::size_t>(unknown_begin + unknown_index)];
-          set_delta_value(delta,
-              unknown_global_dof_ids_[static_cast<std::size_t>(unknown_begin + unknown_index)],
+          set_delta_local_value(unknown_correction_local_dof_ids_[static_cast<std::size_t>(
+                                    unknown_begin + unknown_index)],
               value);
         }
 
@@ -1683,8 +1714,8 @@ namespace ReducedLung
           const int grouped_index = group.begin + lane;
           const int element_index =
               grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
-          const auto& element = tree_metadata_.elements[static_cast<std::size_t>(element_index)];
-          set_delta_value(delta, element.global_dof_ids[0],
+          const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+          set_delta_local_value(inlet_pressure_correction_local_dof_ids_[element_index_size],
               top_down_inlet_pressure_[static_cast<std::size_t>(lane)]);
         }
 
@@ -1708,8 +1739,8 @@ namespace ReducedLung
             const int element_index =
                 grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
             const int unknown_begin = unknown_offset_[static_cast<std::size_t>(element_index)];
-            set_delta_value(delta,
-                unknown_global_dof_ids_[static_cast<std::size_t>(unknown_begin + unknown_index)],
+            set_delta_local_value(unknown_correction_local_dof_ids_[static_cast<std::size_t>(
+                                      unknown_begin + unknown_index)],
                 top_down_unknown_values_[static_cast<std::size_t>(lane)]);
           }
         }

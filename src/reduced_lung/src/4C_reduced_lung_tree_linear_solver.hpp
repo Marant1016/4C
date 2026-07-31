@@ -115,6 +115,9 @@ namespace ReducedLung
     std::vector<int> unknown_global_dof_ids_;
     std::vector<int> unknown_local_dof_ids_;
     std::vector<int> equation_rows_;
+    std::vector<int> inlet_pressure_correction_local_dof_ids_;
+    std::vector<int> unknown_correction_local_dof_ids_;
+    bool correction_local_dof_ids_initialized_ = false;
 
     std::vector<int> child_element_index_;
     std::vector<int> pressure_row_;
