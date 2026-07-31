@@ -1684,6 +1684,61 @@ namespace ReducedLung
         }
       };
 
+      const auto recover_2x2_top_down_group = [&](const ElementGroup& group)
+      {
+        FOUR_C_ASSERT_ALWAYS(group.block_size == 2,
+            "TreeNewtonLinearSolver 2x2 top-down group has block size {}.", group.block_size);
+        FOUR_C_ASSERT_ALWAYS(group.child_count >= 0 && group.child_count <= 2,
+            "TreeNewtonLinearSolver 2x2 top-down group has unsupported child count {}.",
+            group.child_count);
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+          FOUR_C_ASSERT_ALWAYS(inlet_pressure_stamp_[element_index_size] == solve_stamp,
+              "TreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
+              global_element_id_[element_index_size] + 1);
+
+          const double inlet_pressure = inlet_pressure_by_element_[element_index_size];
+          set_delta_local_value(
+              inlet_pressure_correction_local_dof_ids_[element_index_size], inlet_pressure);
+
+          const int unknown_begin = unknown_offset_[element_index_size];
+          const std::size_t unknown0 = static_cast<std::size_t>(unknown_begin);
+          const std::size_t unknown1 = static_cast<std::size_t>(unknown_begin + 1);
+          const double value0 =
+              workspace_slope_[unknown0] * inlet_pressure + workspace_intercept_[unknown0];
+          const double value1 =
+              workspace_slope_[unknown1] * inlet_pressure + workspace_intercept_[unknown1];
+          set_delta_local_value(unknown_correction_local_dof_ids_[unknown0], value0);
+          set_delta_local_value(unknown_correction_local_dof_ids_[unknown1], value1);
+
+          if (group.child_count == 0)
+          {
+            continue;
+          }
+
+          const int outlet_pressure_index = outlet_pressure_unknown_index_[element_index_size];
+          const std::size_t outlet_pressure_unknown =
+              static_cast<std::size_t>(unknown_begin + outlet_pressure_index);
+          const double outlet_pressure =
+              workspace_slope_[outlet_pressure_unknown] * inlet_pressure +
+              workspace_intercept_[outlet_pressure_unknown];
+          const int child_begin = child_interface_offset_[element_index_size];
+          for (int child_slot = 0; child_slot < group.child_count; ++child_slot)
+          {
+            const int child_interface_index = child_begin + child_slot;
+            const std::size_t child_interface_index_size =
+                static_cast<std::size_t>(child_interface_index);
+            const double child_pressure =
+                child_pressure_slope_[child_interface_index_size] * outlet_pressure +
+                child_pressure_intercept_[child_interface_index_size];
+            set_inlet_pressure(child_element_index_[child_interface_index_size], child_pressure);
+          }
+        }
+      };
+
       const auto recover_top_down_group = [&](const ElementGroup& group)
       {
         const int group_size = group.end - group.begin;
@@ -1828,7 +1883,14 @@ namespace ReducedLung
             }
             else
             {
-              recover_top_down_group(group);
+              if (group.block_size == 2 && group.child_count <= 2)
+              {
+                recover_2x2_top_down_group(group);
+              }
+              else
+              {
+                recover_top_down_group(group);
+              }
             }
           }
         }
