@@ -140,6 +140,7 @@ namespace ReducedLung
     std::vector<int> grouped_element_indices_;
     std::vector<std::vector<ElementGroup>> bottom_up_layer_groups_;
     std::vector<std::vector<ElementGroup>> top_down_layer_groups_;
+    bool use_scalar_tree_solve_ = false;
 
     std::vector<double> workspace_matrix_;
     std::vector<double> workspace_rhs_constant_;

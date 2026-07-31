@@ -647,6 +647,8 @@ namespace ReducedLung
     root_inlet_pressure_local_dof_ = root_element.local_dof_ids[0];
 
     const int element_count = static_cast<int>(tree_metadata_.elements.size());
+    constexpr int scalar_tree_element_threshold = 7;
+    use_scalar_tree_solve_ = element_count <= scalar_tree_element_threshold;
     global_element_id_.assign(static_cast<std::size_t>(element_count), -1);
     inlet_pressure_local_dof_.assign(static_cast<std::size_t>(element_count), -1);
     inlet_flow_unknown_index_.assign(static_cast<std::size_t>(element_count), -1);
@@ -1373,6 +1375,75 @@ namespace ReducedLung
         }
       };
 
+      const auto assemble_scalar_element = [&](int element_index)
+      {
+        const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+        const int equation_begin = equation_offset_[element_index_size];
+        const int block_size = block_size_[element_index_size];
+        for (int equation_index = 0; equation_index < block_size; ++equation_index)
+        {
+          const int local_row =
+              equation_rows_[static_cast<std::size_t>(equation_begin + equation_index)];
+          add_equation_row(element_index, equation_index, local_row, 0.0);
+        }
+
+        const int child_count = child_interface_count_[element_index_size];
+        if (child_count == 0)
+        {
+          return;
+        }
+
+        const int unknown_begin = unknown_offset_[element_index_size];
+        const int matrix_begin = matrix_offset_[element_index_size];
+        const int matrix_row_offset = matrix_begin + (block_size - 1) * block_size;
+        double rhs_shift = 0.0;
+        const int child_begin = child_interface_offset_[element_index_size];
+        for (int child_slot = 0; child_slot < child_count; ++child_slot)
+        {
+          const int child_interface_index = child_begin + child_slot;
+          const std::size_t child_interface_index_size =
+              static_cast<std::size_t>(child_interface_index);
+          const std::size_t child_element_index =
+              static_cast<std::size_t>(child_element_index_[child_interface_index_size]);
+
+          const double pressure_parent_coeff = required_matrix_value(coefficients,
+              child_pressure_parent_coefficients_[child_interface_index_size],
+              child_pressure_parent_coefficient_values_[child_interface_index_size],
+              pivot_tolerance_, "pressure-continuity parent pressure");
+          const double pressure_child_coeff = required_matrix_value(coefficients,
+              child_pressure_child_coefficients_[child_interface_index_size],
+              child_pressure_child_coefficient_values_[child_interface_index_size],
+              pivot_tolerance_, "pressure-continuity child pressure");
+          const double pressure_rhs =
+              rhs_value(residual, pressure_row_[child_interface_index_size]);
+
+          const double child_pressure_slope = -pressure_parent_coeff / pressure_child_coeff;
+          const double child_pressure_intercept = pressure_rhs / pressure_child_coeff;
+          child_pressure_slope_[child_interface_index_size] = child_pressure_slope;
+          child_pressure_intercept_[child_interface_index_size] = child_pressure_intercept;
+
+          const double child_flow_slope =
+              subtree_relation_G_[child_element_index] * child_pressure_slope;
+          const double child_flow_intercept =
+              subtree_relation_G_[child_element_index] * child_pressure_intercept +
+              subtree_relation_h_[child_element_index];
+
+          const double flow_child_coeff = required_matrix_value(coefficients,
+              child_flow_coefficients_[child_interface_index_size],
+              child_flow_coefficient_values_[child_interface_index_size], pivot_tolerance_,
+              "junction flow child-flow coefficient");
+
+          const std::size_t parent_outlet_pressure_index = static_cast<std::size_t>(
+              parent_outlet_pressure_unknown_index_[child_interface_index_size]);
+          workspace_matrix_[static_cast<std::size_t>(matrix_row_offset) +
+                            parent_outlet_pressure_index] += flow_child_coeff * child_flow_slope;
+          rhs_shift += flow_child_coeff * child_flow_intercept;
+        }
+
+        workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin + block_size - 1)] -=
+            rhs_shift;
+      };
+
       const auto solve_scalar_element = [&](int element_index)
       {
         const std::size_t element_index_size = static_cast<std::size_t>(element_index);
@@ -1411,73 +1482,88 @@ namespace ReducedLung
       };
 
       const auto bottom_up_start = Clock::now();
-      for (const auto& layer_groups : bottom_up_layer_groups_)
+      if (use_scalar_tree_solve_)
       {
-        for (const auto& group : layer_groups)
+        for (const auto& layer : tree_metadata_.bottom_up_layers)
         {
-          if (group.block_size == 2 && group.child_count == 0)
+          for (const int element_index : layer)
           {
-            assemble_2x2_leaf_group(group);
+            assemble_scalar_element(element_index);
+            solve_scalar_element(element_index);
+            write_subtree_relation(element_index);
           }
-          else if (group.block_size == 2 && group.child_count == 1)
+        }
+      }
+      else
+      {
+        for (const auto& layer_groups : bottom_up_layer_groups_)
+        {
+          for (const auto& group : layer_groups)
           {
-            assemble_2x2_one_child_group(group);
-          }
-          else if (group.block_size == 2 && group.child_count == 2)
-          {
-            assemble_2x2_two_child_group(group);
-          }
-          else
-          {
-            assemble_group(group);
-          }
+            if (group.block_size == 2 && group.child_count == 0)
+            {
+              assemble_2x2_leaf_group(group);
+            }
+            else if (group.block_size == 2 && group.child_count == 1)
+            {
+              assemble_2x2_one_child_group(group);
+            }
+            else if (group.block_size == 2 && group.child_count == 2)
+            {
+              assemble_2x2_two_child_group(group);
+            }
+            else
+            {
+              assemble_group(group);
+            }
 
-          if (group.block_size == 2)
-          {
-            const auto dense_solve_start = Clock::now();
-            solve_2x2_batch(group.begin, group.end, grouped_element_indices_, unknown_offset_,
-                matrix_offset_, workspace_matrix_, workspace_rhs_constant_,
-                workspace_rhs_inlet_pressure_, workspace_intercept_, workspace_slope_,
-                batch_2x2_a00_, batch_2x2_a01_, batch_2x2_a10_, batch_2x2_a11_,
-                batch_2x2_rhs_constant0_, batch_2x2_rhs_constant1_, batch_2x2_rhs_inlet_pressure0_,
-                batch_2x2_rhs_inlet_pressure1_, batch_2x2_intercept0_, batch_2x2_intercept1_,
-                batch_2x2_slope0_, batch_2x2_slope1_, batch_2x2_fallback_lanes_, pivot_tolerance_,
-                element_context_);
-            if (profile_ != nullptr)
+            if (group.block_size == 2)
             {
-              profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
-              profile_->dense_solve_count += static_cast<std::uint64_t>(group.end - group.begin);
+              const auto dense_solve_start = Clock::now();
+              solve_2x2_batch(group.begin, group.end, grouped_element_indices_, unknown_offset_,
+                  matrix_offset_, workspace_matrix_, workspace_rhs_constant_,
+                  workspace_rhs_inlet_pressure_, workspace_intercept_, workspace_slope_,
+                  batch_2x2_a00_, batch_2x2_a01_, batch_2x2_a10_, batch_2x2_a11_,
+                  batch_2x2_rhs_constant0_, batch_2x2_rhs_constant1_,
+                  batch_2x2_rhs_inlet_pressure0_, batch_2x2_rhs_inlet_pressure1_,
+                  batch_2x2_intercept0_, batch_2x2_intercept1_, batch_2x2_slope0_,
+                  batch_2x2_slope1_, batch_2x2_fallback_lanes_, pivot_tolerance_, element_context_);
+              if (profile_ != nullptr)
+              {
+                profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
+                profile_->dense_solve_count += static_cast<std::uint64_t>(group.end - group.begin);
+              }
             }
-          }
-          else if (group.block_size == 3)
-          {
-            const auto dense_solve_start = Clock::now();
-            solve_3x3_batch(group.begin, group.end, grouped_element_indices_, unknown_offset_,
-                matrix_offset_, workspace_matrix_, workspace_rhs_constant_,
-                workspace_rhs_inlet_pressure_, workspace_intercept_, workspace_slope_,
-                batch_3x3_a00_, batch_3x3_a01_, batch_3x3_a02_, batch_3x3_a10_, batch_3x3_a11_,
-                batch_3x3_a12_, batch_3x3_a20_, batch_3x3_a21_, batch_3x3_a22_,
-                batch_3x3_rhs_constant0_, batch_3x3_rhs_constant1_, batch_3x3_rhs_constant2_,
-                batch_3x3_rhs_inlet_pressure0_, batch_3x3_rhs_inlet_pressure1_,
-                batch_3x3_rhs_inlet_pressure2_, batch_3x3_intercept0_, batch_3x3_intercept1_,
-                batch_3x3_intercept2_, batch_3x3_slope0_, batch_3x3_slope1_, batch_3x3_slope2_,
-                batch_3x3_fallback_lanes_, pivot_tolerance_, element_context_);
-            if (profile_ != nullptr)
+            else if (group.block_size == 3)
             {
-              profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
-              profile_->dense_solve_count += static_cast<std::uint64_t>(group.end - group.begin);
+              const auto dense_solve_start = Clock::now();
+              solve_3x3_batch(group.begin, group.end, grouped_element_indices_, unknown_offset_,
+                  matrix_offset_, workspace_matrix_, workspace_rhs_constant_,
+                  workspace_rhs_inlet_pressure_, workspace_intercept_, workspace_slope_,
+                  batch_3x3_a00_, batch_3x3_a01_, batch_3x3_a02_, batch_3x3_a10_, batch_3x3_a11_,
+                  batch_3x3_a12_, batch_3x3_a20_, batch_3x3_a21_, batch_3x3_a22_,
+                  batch_3x3_rhs_constant0_, batch_3x3_rhs_constant1_, batch_3x3_rhs_constant2_,
+                  batch_3x3_rhs_inlet_pressure0_, batch_3x3_rhs_inlet_pressure1_,
+                  batch_3x3_rhs_inlet_pressure2_, batch_3x3_intercept0_, batch_3x3_intercept1_,
+                  batch_3x3_intercept2_, batch_3x3_slope0_, batch_3x3_slope1_, batch_3x3_slope2_,
+                  batch_3x3_fallback_lanes_, pivot_tolerance_, element_context_);
+              if (profile_ != nullptr)
+              {
+                profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
+                profile_->dense_solve_count += static_cast<std::uint64_t>(group.end - group.begin);
+              }
             }
-          }
-          else
-          {
-            for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+            else
             {
-              solve_scalar_element(
-                  grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
+              for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+              {
+                solve_scalar_element(
+                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
+              }
             }
-          }
 
-          write_subtree_relation_group(group);
+            write_subtree_relation_group(group);
+          }
         }
       }
       if (profile_ != nullptr)
@@ -1671,25 +1757,38 @@ namespace ReducedLung
 
       const auto top_down_start = Clock::now();
       constexpr int top_down_scalar_group_threshold = 2;
-      for (const auto& layer_groups : top_down_layer_groups_)
+      if (use_scalar_tree_solve_)
       {
-        for (const auto& group : layer_groups)
+        for (const auto& layer : tree_metadata_.top_down_layers)
         {
-          const int group_size = group.end - group.begin;
-          FOUR_C_ASSERT_ALWAYS(group_size >= 0,
-              "TreeNewtonLinearSolver top-down group has invalid range [{}, {}).", group.begin,
-              group.end);
-          if (group_size <= top_down_scalar_group_threshold)
+          for (const int element_index : layer)
           {
-            for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
-            {
-              recover_top_down_element(
-                  grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
-            }
+            recover_top_down_element(element_index);
           }
-          else
+        }
+      }
+      else
+      {
+        for (const auto& layer_groups : top_down_layer_groups_)
+        {
+          for (const auto& group : layer_groups)
           {
-            recover_top_down_group(group);
+            const int group_size = group.end - group.begin;
+            FOUR_C_ASSERT_ALWAYS(group_size >= 0,
+                "TreeNewtonLinearSolver top-down group has invalid range [{}, {}).", group.begin,
+                group.end);
+            if (group_size <= top_down_scalar_group_threshold)
+            {
+              for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+              {
+                recover_top_down_element(
+                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
+              }
+            }
+            else
+            {
+              recover_top_down_group(group);
+            }
           }
         }
       }
