@@ -1166,6 +1166,134 @@ namespace ReducedLung
         }
       };
 
+      const auto add_2x2_equation_rows = [&](int element_index)
+      {
+        const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+        const int unknown_begin = unknown_offset_[element_index_size];
+        const int equation_begin = equation_offset_[element_index_size];
+        const int matrix_begin = matrix_offset_[element_index_size];
+        const int row0 = equation_rows_[static_cast<std::size_t>(equation_begin)];
+        const int row1 = equation_rows_[static_cast<std::size_t>(equation_begin + 1)];
+
+        workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin)] =
+            rhs_value(residual, row0);
+        workspace_rhs_inlet_pressure_[static_cast<std::size_t>(unknown_begin)] = -matrix_value(
+            coefficients,
+            equation_inlet_pressure_coefficients_[static_cast<std::size_t>(unknown_begin)],
+            equation_inlet_pressure_coefficient_values_[static_cast<std::size_t>(unknown_begin)],
+            pivot_tolerance_);
+        workspace_matrix_[static_cast<std::size_t>(matrix_begin)] = matrix_value(coefficients,
+            matrix_coefficients_[static_cast<std::size_t>(matrix_begin)],
+            matrix_coefficient_values_[static_cast<std::size_t>(matrix_begin)], pivot_tolerance_);
+        workspace_matrix_[static_cast<std::size_t>(matrix_begin + 1)] = matrix_value(coefficients,
+            matrix_coefficients_[static_cast<std::size_t>(matrix_begin + 1)],
+            matrix_coefficient_values_[static_cast<std::size_t>(matrix_begin + 1)],
+            pivot_tolerance_);
+
+        workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin + 1)] =
+            rhs_value(residual, row1);
+        workspace_rhs_inlet_pressure_[static_cast<std::size_t>(unknown_begin + 1)] =
+            -matrix_value(coefficients,
+                equation_inlet_pressure_coefficients_[static_cast<std::size_t>(unknown_begin + 1)],
+                equation_inlet_pressure_coefficient_values_[static_cast<std::size_t>(
+                    unknown_begin + 1)],
+                pivot_tolerance_);
+        workspace_matrix_[static_cast<std::size_t>(matrix_begin + 2)] = matrix_value(coefficients,
+            matrix_coefficients_[static_cast<std::size_t>(matrix_begin + 2)],
+            matrix_coefficient_values_[static_cast<std::size_t>(matrix_begin + 2)],
+            pivot_tolerance_);
+        workspace_matrix_[static_cast<std::size_t>(matrix_begin + 3)] = matrix_value(coefficients,
+            matrix_coefficients_[static_cast<std::size_t>(matrix_begin + 3)],
+            matrix_coefficient_values_[static_cast<std::size_t>(matrix_begin + 3)],
+            pivot_tolerance_);
+      };
+
+      const auto add_2x2_child_contribution =
+          [&](int child_interface_index, int matrix_row_offset, double& rhs_shift)
+      {
+        const std::size_t child_interface_index_size =
+            static_cast<std::size_t>(child_interface_index);
+        const std::size_t child_element_index =
+            static_cast<std::size_t>(child_element_index_[child_interface_index_size]);
+
+        const double pressure_parent_coeff = required_matrix_value(coefficients,
+            child_pressure_parent_coefficients_[child_interface_index_size],
+            child_pressure_parent_coefficient_values_[child_interface_index_size], pivot_tolerance_,
+            "pressure-continuity parent pressure");
+        const double pressure_child_coeff = required_matrix_value(coefficients,
+            child_pressure_child_coefficients_[child_interface_index_size],
+            child_pressure_child_coefficient_values_[child_interface_index_size], pivot_tolerance_,
+            "pressure-continuity child pressure");
+        const double pressure_rhs = rhs_value(residual, pressure_row_[child_interface_index_size]);
+
+        const double child_pressure_slope = -pressure_parent_coeff / pressure_child_coeff;
+        const double child_pressure_intercept = pressure_rhs / pressure_child_coeff;
+        child_pressure_slope_[child_interface_index_size] = child_pressure_slope;
+        child_pressure_intercept_[child_interface_index_size] = child_pressure_intercept;
+
+        const double child_flow_slope =
+            subtree_relation_G_[child_element_index] * child_pressure_slope;
+        const double child_flow_intercept =
+            subtree_relation_G_[child_element_index] * child_pressure_intercept +
+            subtree_relation_h_[child_element_index];
+
+        const double flow_child_coeff = required_matrix_value(coefficients,
+            child_flow_coefficients_[child_interface_index_size],
+            child_flow_coefficient_values_[child_interface_index_size], pivot_tolerance_,
+            "junction flow child-flow coefficient");
+
+        const std::size_t parent_outlet_pressure_index = static_cast<std::size_t>(
+            parent_outlet_pressure_unknown_index_[child_interface_index_size]);
+        workspace_matrix_[static_cast<std::size_t>(matrix_row_offset) +
+                          parent_outlet_pressure_index] += flow_child_coeff * child_flow_slope;
+        rhs_shift += flow_child_coeff * child_flow_intercept;
+      };
+
+      const auto assemble_2x2_leaf_group = [&](const ElementGroup& group)
+      {
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          add_2x2_equation_rows(grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
+        }
+      };
+
+      const auto assemble_2x2_one_child_group = [&](const ElementGroup& group)
+      {
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+          add_2x2_equation_rows(element_index);
+
+          double rhs_shift = 0.0;
+          add_2x2_child_contribution(child_interface_offset_[element_index_size],
+              matrix_offset_[element_index_size] + 2, rhs_shift);
+          workspace_rhs_constant_[static_cast<std::size_t>(
+              unknown_offset_[element_index_size] + 1)] -= rhs_shift;
+        }
+      };
+
+      const auto assemble_2x2_two_child_group = [&](const ElementGroup& group)
+      {
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+          add_2x2_equation_rows(element_index);
+
+          const int child_begin = child_interface_offset_[element_index_size];
+          double rhs_shift = 0.0;
+          add_2x2_child_contribution(
+              child_begin, matrix_offset_[element_index_size] + 2, rhs_shift);
+          add_2x2_child_contribution(
+              child_begin + 1, matrix_offset_[element_index_size] + 2, rhs_shift);
+          workspace_rhs_constant_[static_cast<std::size_t>(
+              unknown_offset_[element_index_size] + 1)] -= rhs_shift;
+        }
+      };
+
       const auto assemble_group = [&](const ElementGroup& group)
       {
         for (int equation_index = 0; equation_index < group.block_size; ++equation_index)
@@ -1287,7 +1415,22 @@ namespace ReducedLung
       {
         for (const auto& group : layer_groups)
         {
-          assemble_group(group);
+          if (group.block_size == 2 && group.child_count == 0)
+          {
+            assemble_2x2_leaf_group(group);
+          }
+          else if (group.block_size == 2 && group.child_count == 1)
+          {
+            assemble_2x2_one_child_group(group);
+          }
+          else if (group.block_size == 2 && group.child_count == 2)
+          {
+            assemble_2x2_two_child_group(group);
+          }
+          else
+          {
+            assemble_group(group);
+          }
 
           if (group.block_size == 2)
           {
