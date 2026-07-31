@@ -130,6 +130,13 @@ namespace ReducedLung
     std::vector<TreeCoefficientLocation> child_pressure_child_coefficients_;
     std::vector<TreeCoefficientLocation> child_flow_coefficients_;
 
+    double root_boundary_coefficient_value_ = 0.0;
+    std::vector<double> equation_inlet_pressure_coefficient_values_;
+    std::vector<double> matrix_coefficient_values_;
+    std::vector<double> child_pressure_parent_coefficient_values_;
+    std::vector<double> child_pressure_child_coefficient_values_;
+    std::vector<double> child_flow_coefficient_values_;
+
     std::vector<int> grouped_element_indices_;
     std::vector<std::vector<ElementGroup>> bottom_up_layer_groups_;
     std::vector<std::vector<ElementGroup>> top_down_layer_groups_;
