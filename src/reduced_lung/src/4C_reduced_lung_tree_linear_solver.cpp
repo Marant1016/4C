@@ -1076,7 +1076,7 @@ namespace ReducedLung
   {
     (void)x;
     (void)metadata;
-    const auto solve_start = Clock::now();
+    const auto solve_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
 
     int comm_size = 1;
     MPI_Comm_size(delta.get_comm(), &comm_size);
@@ -1440,7 +1440,7 @@ namespace ReducedLung
         const int unknown_begin = unknown_offset_[element_index_size];
         const int matrix_begin = matrix_offset_[element_index_size];
         const int block_size = block_size_[element_index_size];
-        const auto dense_solve_start = Clock::now();
+        const auto dense_solve_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
         solve_dense_system(workspace_matrix_.data() + matrix_begin,
             workspace_rhs_constant_.data() + unknown_begin,
             workspace_rhs_inlet_pressure_.data() + unknown_begin,
@@ -1471,7 +1471,7 @@ namespace ReducedLung
         }
       };
 
-      const auto bottom_up_start = Clock::now();
+      const auto bottom_up_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
       if (use_scalar_tree_solve_)
       {
         for (const auto& layer : tree_metadata_.bottom_up_layers)
@@ -1509,7 +1509,8 @@ namespace ReducedLung
 
             if (group.block_size == 2)
             {
-              const auto dense_solve_start = Clock::now();
+              const auto dense_solve_start =
+                  profile_ != nullptr ? Clock::now() : Clock::time_point{};
               solve_2x2_batch(group.begin, group.end, grouped_element_indices_, unknown_offset_,
                   matrix_offset_, workspace_matrix_, workspace_rhs_constant_,
                   workspace_rhs_inlet_pressure_, workspace_intercept_, workspace_slope_,
@@ -1522,7 +1523,8 @@ namespace ReducedLung
             }
             else if (group.block_size == 3)
             {
-              const auto dense_solve_start = Clock::now();
+              const auto dense_solve_start =
+                  profile_ != nullptr ? Clock::now() : Clock::time_point{};
               solve_3x3_batch(group.begin, group.end, grouped_element_indices_, unknown_offset_,
                   matrix_offset_, workspace_matrix_, workspace_rhs_constant_,
                   workspace_rhs_inlet_pressure_, workspace_intercept_, workspace_slope_,
@@ -1800,7 +1802,7 @@ namespace ReducedLung
         }
       };
 
-      const auto top_down_start = Clock::now();
+      const auto top_down_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
       constexpr int top_down_scalar_group_threshold = 2;
       if (use_scalar_tree_solve_)
       {
