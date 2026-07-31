@@ -138,6 +138,28 @@ namespace ReducedLung
     std::vector<double> batch_2x2_slope0_;
     std::vector<double> batch_2x2_slope1_;
     std::vector<int> batch_2x2_fallback_lanes_;
+    std::vector<double> batch_3x3_a00_;
+    std::vector<double> batch_3x3_a01_;
+    std::vector<double> batch_3x3_a02_;
+    std::vector<double> batch_3x3_a10_;
+    std::vector<double> batch_3x3_a11_;
+    std::vector<double> batch_3x3_a12_;
+    std::vector<double> batch_3x3_a20_;
+    std::vector<double> batch_3x3_a21_;
+    std::vector<double> batch_3x3_a22_;
+    std::vector<double> batch_3x3_rhs_constant0_;
+    std::vector<double> batch_3x3_rhs_constant1_;
+    std::vector<double> batch_3x3_rhs_constant2_;
+    std::vector<double> batch_3x3_rhs_inlet_pressure0_;
+    std::vector<double> batch_3x3_rhs_inlet_pressure1_;
+    std::vector<double> batch_3x3_rhs_inlet_pressure2_;
+    std::vector<double> batch_3x3_intercept0_;
+    std::vector<double> batch_3x3_intercept1_;
+    std::vector<double> batch_3x3_intercept2_;
+    std::vector<double> batch_3x3_slope0_;
+    std::vector<double> batch_3x3_slope1_;
+    std::vector<double> batch_3x3_slope2_;
+    std::vector<int> batch_3x3_fallback_lanes_;
     std::vector<std::string> element_context_;
 
     std::vector<double> subtree_relation_G_;
