@@ -98,4 +98,66 @@ ctest -R "^unittests_reduced_lung$" --output-on-failure
 ctest -R "reduced_lung_.*newton_tree.*\.4C\.yaml-p1$" --output-on-failure
 ```
 
-No benchmark rerun was performed in this step.
+## Post-Optimization Benchmark Rerun
+
+The release benchmark target was rebuilt and the Step 1 baseline benchmark commands were rerun on 2026-07-31 after Steps 2-8:
+
+```text
+/scratch/Rodriguez/workspace/CLion-2026.1.3/clion-2026.1.3/bin/cmake/linux/x64/bin/cmake --build build/release --target benchmarktests_reduced_lung --parallel 4
+./build/release/tests/benchmarktests_reduced_lung --benchmark_filter=ReducedLung/LinearSolve/BalancedAirways/StructuredTree --benchmark_repetitions=5 --benchmark_min_time=0.01s
+./build/release/tests/benchmarktests_reduced_lung --benchmark_filter="ReducedLung/FullSolve/(SingleTerminalUnit|SerialAirways|BalancedAirways)/NewtonTree" --benchmark_repetitions=5 --benchmark_min_time=0.01s
+```
+
+The benchmark run emitted the same expected authorization, CPU-scaling, and PHG redistribution warnings as the baseline. The structured linear-solve run also had high CV for several cases (`StructuredTree/3` through `StructuredTree/5`), so these values should be treated as directional.
+
+The full-solve raw output was saved by the tool harness at:
+
+```text
+/data/home/Rodriguez/.local/share/opencode/tool-output/tool_fb7aa8934001yl8lmNF58Z32zi
+```
+
+### Structured Tree Linear-Solve Means After Steps 2-8
+
+| Benchmark | Elements | Dofs | Time | tree_solve_s | tree_bottom_up_s | tree_top_down_s | tree_dense_s | tree_lookup_s | tree_dense_solves | tree_lookups | tree_workspace_dofs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `StructuredTree/2_mean` | 3 | 9 | 3.62 us | 3.57132 us | 2.57131 us | 673.297 ns | 144.538 ns | 1.13985 us | 3 | 25 | 6 |
+| `StructuredTree/3_mean` | 7 | 21 | 7.32 us | 7.28161 us | 5.68451 us | 1.30619 us | 238.468 ns | 2.44153 us | 7 | 61 | 14 |
+| `StructuredTree/4_mean` | 15 | 45 | 12.2 us | 12.2106 us | 9.91442 us | 2.06206 us | 346.583 ns | 4.19262 us | 15 | 133 | 30 |
+| `StructuredTree/5_mean` | 31 | 93 | 20.6 us | 20.5871 us | 17.1735 us | 3.21247 us | 538.696 ns | 7.17352 us | 31 | 277 | 62 |
+
+### Structured Tree Linear-Solve Delta Versus Step 1
+
+| Benchmark | Time | tree_solve_s | tree_bottom_up_s | tree_top_down_s | tree_dense_s | tree_lookup_s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `StructuredTree/2_mean` | +91.5% | +91.0% | +76.7% | +174.6% | +6.3% | +114.9% |
+| `StructuredTree/3_mean` | +23.9% | +24.0% | +19.1% | +51.9% | -36.0% | +37.5% |
+| `StructuredTree/4_mean` | +9.9% | +10.1% | +5.9% | +36.8% | -51.6% | +22.8% |
+| `StructuredTree/5_mean` | -0.5% | -0.2% | -3.6% | +24.7% | -64.0% | +10.4% |
+
+### Full `NewtonTree` Solve Means After Steps 2-8
+
+| Benchmark | Elements | Dofs | Time | newton_total_s | linear_solve_s | tree_solve_s | tree_bottom_up_s | tree_top_down_s | tree_dense_s | tree_lookup_s | tree_assembly_s | residual_s | state_sync_s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `SingleTerminalUnit/NewtonTree_mean` | 1 | 3 | 17.4 us | 14.2085 us | 2.77243 us | 2.57056 us | 1.48741 us | 452.754 ns | 352.118 ns | 557.193 ns | 1.0651 us | 2.68723 us | 6.53161 us |
+| `SerialAirways/NewtonTree_mean` | 9 | 27 | 43.5 us | 40.3267 us | 14.9048 us | 14.7076 us | 11.739 us | 2.32664 us | 1.21582 us | 4.26844 us | 4.45596 us | 5.04992 us | 14.6104 us |
+| `BalancedAirways/NewtonTree_mean` | 15 | 45 | 57.3 us | 54.3351 us | 21.7832 us | 21.6116 us | 17.307 us | 3.67703 us | 904.945 ns | 7.02548 us | 6.16467 us | 5.89611 us | 19.1609 us |
+
+All three full-solve benchmark cases still reported `nonlinear_iterations=2`.
+
+### Full `NewtonTree` Solve Delta Versus Step 1
+
+| Benchmark | Time | newton_total_s | linear_solve_s | tree_solve_s | tree_bottom_up_s | tree_top_down_s | tree_dense_s | tree_lookup_s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `SingleTerminalUnit/NewtonTree_mean` | +5.5% | +4.9% | +8.6% | +5.6% | -1.7% | +50.1% | -2.0% | -9.3% |
+| `SerialAirways/NewtonTree_mean` | +2.6% | +2.1% | +0.9% | +0.5% | -2.7% | +23.0% | -3.5% | -1.6% |
+| `BalancedAirways/NewtonTree_mean` | -22.4% | -23.3% | -25.3% | -25.5% | -28.1% | -11.1% | -53.2% | -22.2% |
+
+### Post-Optimization Conclusion
+
+The full Step 2-8 series did not produce uniform speedups in this noisy benchmark environment. The largest structured linear-solve case (`StructuredTree/5_mean`) is essentially flat against Step 1 (`20.5871 us` tree solve after Steps 2-8 versus `20.6226 us` baseline), with lower bottom-up and dense-solve time offset by higher top-down and lookup time.
+
+The dense batch solver work is visible on larger linear cases: `tree_dense_s` dropped by about `52%` for `StructuredTree/4_mean` and `64%` for `StructuredTree/5_mean`. Smaller structured-tree cases regressed because the added grouping/staging overhead dominates their tiny work sizes.
+
+The full `BalancedAirways/NewtonTree_mean` case improved substantially (`tree_solve_s` down about `25.5%`, `newton_total_s` down about `23.3%`), but the current run's CPU-scaling warning and `12.17%` CV mean this should be treated as directional rather than final proof. The single-terminal and serial-airways full-solve cases are effectively flat to slightly slower.
+
+The next useful optimization should target the remaining structured-coefficient lookup overhead and top-down staging overhead. The most direct follow-up is still the guide's precomputed coefficient-location/direct tree-block storage work, because `tree_lookup_s` remains a large share of the measured tree solve and increased in the standalone structured linear-solve rerun.
