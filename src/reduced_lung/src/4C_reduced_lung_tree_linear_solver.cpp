@@ -872,6 +872,10 @@ namespace ReducedLung
     }
 
     grouped_element_indices_.clear();
+    grouped_unknown_begin_.clear();
+    grouped_matrix_begin_.clear();
+    grouped_equation_begin_.clear();
+    grouped_child_begin_.clear();
     bottom_up_layer_groups_.clear();
     top_down_layer_groups_.clear();
     const auto build_layer_groups = [&](const std::vector<std::vector<int>>& layers,
@@ -927,6 +931,10 @@ namespace ReducedLung
                 child_interface_count_[element_index_size] == shape_key.child_count)
             {
               grouped_element_indices_.push_back(element_index);
+              grouped_unknown_begin_.push_back(unknown_offset_[element_index_size]);
+              grouped_matrix_begin_.push_back(matrix_offset_[element_index_size]);
+              grouped_equation_begin_.push_back(equation_offset_[element_index_size]);
+              grouped_child_begin_.push_back(child_interface_offset_[element_index_size]);
             }
           }
           group.end = static_cast<int>(grouped_element_indices_.size());
@@ -940,6 +948,12 @@ namespace ReducedLung
     };
     build_layer_groups(tree_metadata_.bottom_up_layers, bottom_up_layer_groups_);
     build_layer_groups(tree_metadata_.top_down_layers, top_down_layer_groups_);
+
+    FOUR_C_ASSERT_ALWAYS(grouped_unknown_begin_.size() == grouped_element_indices_.size() &&
+                             grouped_matrix_begin_.size() == grouped_element_indices_.size() &&
+                             grouped_equation_begin_.size() == grouped_element_indices_.size() &&
+                             grouped_child_begin_.size() == grouped_element_indices_.size(),
+        "TreeNewtonLinearSolver grouped offset caches do not match grouped element indices.");
 
     const auto validate_grouped_traversal =
         [&](const std::vector<std::vector<ElementGroup>>& groups, const std::string& traversal_name)
@@ -956,8 +970,8 @@ namespace ReducedLung
               group.begin, group.end);
           for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
           {
-            const int element_index =
-                grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+            const std::size_t grouped_index_size = static_cast<std::size_t>(grouped_index);
+            const int element_index = grouped_element_indices_[grouped_index_size];
             FOUR_C_ASSERT_ALWAYS(element_index >= 0 && element_index < element_count,
                 "TreeNewtonLinearSolver {} group references invalid element index {}.",
                 traversal_name, element_index);
@@ -967,6 +981,16 @@ namespace ReducedLung
                     group.child_count == child_interface_count_[element_index_size],
                 "TreeNewtonLinearSolver {} group shape does not match element {}.", traversal_name,
                 global_element_id_[element_index_size] + 1);
+            FOUR_C_ASSERT_ALWAYS(
+                grouped_unknown_begin_[grouped_index_size] == unknown_offset_[element_index_size] &&
+                    grouped_matrix_begin_[grouped_index_size] ==
+                        matrix_offset_[element_index_size] &&
+                    grouped_equation_begin_[grouped_index_size] ==
+                        equation_offset_[element_index_size] &&
+                    grouped_child_begin_[grouped_index_size] ==
+                        child_interface_offset_[element_index_size],
+                "TreeNewtonLinearSolver {} grouped offset cache does not match element {}.",
+                traversal_name, global_element_id_[element_index_size] + 1);
             ++visit_count[element_index_size];
           }
         }

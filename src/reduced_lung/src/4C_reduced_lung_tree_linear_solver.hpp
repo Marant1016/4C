@@ -141,6 +141,10 @@ namespace ReducedLung
     std::vector<double> child_flow_coefficient_values_;
 
     std::vector<int> grouped_element_indices_;
+    std::vector<int> grouped_unknown_begin_;
+    std::vector<int> grouped_matrix_begin_;
+    std::vector<int> grouped_equation_begin_;
+    std::vector<int> grouped_child_begin_;
     std::vector<std::vector<ElementGroup>> bottom_up_layer_groups_;
     std::vector<std::vector<ElementGroup>> top_down_layer_groups_;
     bool use_scalar_tree_solve_ = false;
