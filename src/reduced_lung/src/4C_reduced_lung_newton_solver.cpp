@@ -9,6 +9,7 @@
 
 #include "4C_reduced_lung_newton_solver.hpp"
 
+#include "4C_comm_mpi_utils.hpp"
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_utils_sparse_algebra_manipulation.hpp"
 #include "4C_linalg_vector.hpp"
@@ -145,8 +146,16 @@ namespace ReducedLung
 
   void NewtonSolver::sync_state_from_x(const Core::LinAlg::Vector<double>& x)
   {
-    Core::LinAlg::export_to(x, dofs_);
-    Core::LinAlg::export_to(dofs_, locally_relevant_dofs_);
+    if (Core::Communication::num_mpi_ranks(x.get_comm()) == 1)
+    {
+      dofs_.update(1.0, x, 0.0);
+      locally_relevant_dofs_.update(1.0, x, 0.0);
+    }
+    else
+    {
+      Core::LinAlg::export_to(x, dofs_);
+      Core::LinAlg::export_to(dofs_, locally_relevant_dofs_);
+    }
 
     for (const auto& update_state : assembly_pipeline_.state_updaters)
     {

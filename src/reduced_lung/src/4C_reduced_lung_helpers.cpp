@@ -310,8 +310,16 @@ namespace ReducedLung
 
   void NoxSolver::sync_state_from_x(const Core::LinAlg::Vector<double>& x)
   {
-    Core::LinAlg::export_to(x, dofs_);
-    Core::LinAlg::export_to(dofs_, locally_relevant_dofs_);
+    if (Core::Communication::num_mpi_ranks(x.get_comm()) == 1)
+    {
+      dofs_.update(1.0, x, 0.0);
+      locally_relevant_dofs_.update(1.0, x, 0.0);
+    }
+    else
+    {
+      Core::LinAlg::export_to(x, dofs_);
+      Core::LinAlg::export_to(dofs_, locally_relevant_dofs_);
+    }
 
     for (const auto& update_state : assembly_pipeline_.state_updaters)
     {
