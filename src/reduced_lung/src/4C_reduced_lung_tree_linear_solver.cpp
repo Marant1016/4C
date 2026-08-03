@@ -24,6 +24,17 @@
 #include <string>
 #include <vector>
 
+#if defined(__has_include)
+#if __has_include(<experimental/simd>)
+#include <experimental/simd>
+#define FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD 1
+#else
+#define FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD 0
+#endif
+#else
+#define FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD 0
+#endif
+
 FOUR_C_NAMESPACE_OPEN
 
 namespace ReducedLung
@@ -31,6 +42,60 @@ namespace ReducedLung
   namespace
   {
     using Clock = std::chrono::steady_clock;
+
+    namespace tree_solver_simd
+    {
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+      namespace stdx = std::experimental;
+
+      using Double = stdx::native_simd<double>;
+      using Mask = typename Double::mask_type;
+
+      [[maybe_unused]] constexpr bool available = true;
+
+      [[nodiscard, maybe_unused]] constexpr int width() { return static_cast<int>(Double::size()); }
+
+      [[nodiscard, maybe_unused]] int full_chunk_end(int begin, int end)
+      {
+        const int count = end - begin;
+        return begin + count / width() * width();
+      }
+
+      [[nodiscard, maybe_unused]] bool has_full_chunk(int begin, int end)
+      {
+        return end - begin >= width();
+      }
+
+      template <typename Load>
+      [[nodiscard, maybe_unused]] Double gather(int grouped_begin, Load&& load)
+      {
+        return Double([&](auto lane) { return load(grouped_begin + static_cast<int>(lane)); });
+      }
+
+      template <typename Store>
+      [[maybe_unused]] void scatter(const Double& values, int grouped_begin, Store&& store)
+      {
+        for (int lane = 0; lane < width(); ++lane)
+        {
+          store(grouped_begin + lane, values[static_cast<std::size_t>(lane)]);
+        }
+      }
+#else
+      [[maybe_unused]] constexpr bool available = false;
+
+      [[nodiscard, maybe_unused]] constexpr int width() { return 1; }
+
+      [[nodiscard, maybe_unused]] constexpr int full_chunk_end(int begin, int /*end*/)
+      {
+        return begin;
+      }
+
+      [[nodiscard, maybe_unused]] constexpr bool has_full_chunk(int /*begin*/, int /*end*/)
+      {
+        return false;
+      }
+#endif
+    }  // namespace tree_solver_simd
 
     double elapsed_seconds(const Clock::time_point start)
     {
