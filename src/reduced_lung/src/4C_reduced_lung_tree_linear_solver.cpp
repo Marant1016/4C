@@ -470,7 +470,7 @@ namespace ReducedLung
         std::vector<double>& intercept0, std::vector<double>& intercept1,
         std::vector<double>& slope0, std::vector<double>& slope1, std::vector<int>& fallback_lanes,
         TreeNewtonLinearSolverProfile* profile, double pivot_tolerance,
-        const std::vector<std::string>& element_context)
+        bool error_on_dense_fallback, const std::vector<std::string>& element_context)
     {
       const int group_size = group_end - group_begin;
       FOUR_C_ASSERT_ALWAYS(group_size >= 0, "TreeNewtonLinearSolver 2x2 batch has invalid range.");
@@ -616,6 +616,10 @@ namespace ReducedLung
       {
         profile->dense_fallback_count += static_cast<std::uint64_t>(fallback_count);
       }
+      FOUR_C_ASSERT_ALWAYS(!error_on_dense_fallback || fallback_count == 0,
+          "TreeNewtonLinearSolver 2x2 batch requires dense fallback for {} lanes in group [{}, "
+          "{}).",
+          fallback_count, group_begin, group_end);
       for (int fallback_index = 0; fallback_index < fallback_count; ++fallback_index)
       {
         const int lane = fallback_lanes[static_cast<std::size_t>(fallback_index)];
@@ -651,7 +655,8 @@ namespace ReducedLung
         std::vector<double>& intercept1, std::vector<double>& intercept2,
         std::vector<double>& slope0, std::vector<double>& slope1, std::vector<double>& slope2,
         std::vector<int>& fallback_lanes, TreeNewtonLinearSolverProfile* profile,
-        double pivot_tolerance, const std::vector<std::string>& element_context)
+        double pivot_tolerance, bool error_on_dense_fallback,
+        const std::vector<std::string>& element_context)
     {
       const int group_size = group_end - group_begin;
       FOUR_C_ASSERT_ALWAYS(group_size >= 0, "TreeNewtonLinearSolver 3x3 batch has invalid range.");
@@ -895,6 +900,10 @@ namespace ReducedLung
       {
         profile->dense_fallback_count += static_cast<std::uint64_t>(fallback_count);
       }
+      FOUR_C_ASSERT_ALWAYS(!error_on_dense_fallback || fallback_count == 0,
+          "TreeNewtonLinearSolver 3x3 batch requires dense fallback for {} lanes in group [{}, "
+          "{}).",
+          fallback_count, group_begin, group_end);
       for (int fallback_index = 0; fallback_index < fallback_count; ++fallback_index)
       {
         const int lane = fallback_lanes[static_cast<std::size_t>(fallback_index)];
@@ -936,7 +945,8 @@ namespace ReducedLung
         pivot_tolerance_(context.pivot_tolerance),
         coefficient_source_(context.coefficient_source),
         profile_(context.profile),
-        force_batch_tree_solve_(context.force_batch_tree_solve)
+        force_batch_tree_solve_(context.force_batch_tree_solve),
+        error_on_dense_fallback_(context.error_on_dense_fallback)
   {
     FOUR_C_ASSERT_ALWAYS(pivot_tolerance_ > 0.0,
         "TreeNewtonLinearSolver requires a positive pivot tolerance, got {}.", pivot_tolerance_);
@@ -2769,7 +2779,7 @@ namespace ReducedLung
                   batch_2x2_rhs_constant1_, batch_2x2_rhs_inlet_pressure0_,
                   batch_2x2_rhs_inlet_pressure1_, batch_2x2_intercept0_, batch_2x2_intercept1_,
                   batch_2x2_slope0_, batch_2x2_slope1_, batch_2x2_fallback_lanes_, profile_,
-                  pivot_tolerance_, element_context_);
+                  pivot_tolerance_, error_on_dense_fallback_, element_context_);
               write_2x2_batch_solution_to_workspace(group);
               if (profile_ != nullptr)
               {
@@ -2800,7 +2810,8 @@ namespace ReducedLung
                   batch_3x3_rhs_inlet_pressure0_, batch_3x3_rhs_inlet_pressure1_,
                   batch_3x3_rhs_inlet_pressure2_, batch_3x3_intercept0_, batch_3x3_intercept1_,
                   batch_3x3_intercept2_, batch_3x3_slope0_, batch_3x3_slope1_, batch_3x3_slope2_,
-                  batch_3x3_fallback_lanes_, profile_, pivot_tolerance_, element_context_);
+                  batch_3x3_fallback_lanes_, profile_, pivot_tolerance_, error_on_dense_fallback_,
+                  element_context_);
               write_3x3_batch_solution_to_workspace(group);
               if (profile_ != nullptr)
               {

@@ -47,6 +47,7 @@ namespace ReducedLung
         TreeNewtonLinearSolverCoefficientSource::SparseJacobian;
     TreeNewtonLinearSolverProfile* profile = nullptr;
     bool force_batch_tree_solve = false;
+    bool error_on_dense_fallback = false;
   };
 
   /**
@@ -98,6 +99,7 @@ namespace ReducedLung
     const TreeLinearization* tree_linearization_ = nullptr;
     TreeNewtonLinearSolverProfile* profile_ = nullptr;
     bool force_batch_tree_solve_ = false;
+    bool error_on_dense_fallback_ = false;
 
     int root_boundary_row_ = -1;
     int root_inlet_pressure_local_dof_ = -1;
