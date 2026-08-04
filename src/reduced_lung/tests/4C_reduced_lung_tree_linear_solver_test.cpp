@@ -20,6 +20,7 @@
 #include "4C_reduced_lung_junctions.hpp"
 #include "4C_reduced_lung_linear_solver.hpp"
 #include "4C_reduced_lung_newton_solver.hpp"
+#include "4C_reduced_lung_solver_profile.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
 #include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_reduced_lung_tree_metadata.hpp"
@@ -31,6 +32,7 @@
 
 #include <algorithm>
 #include <any>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -360,6 +362,167 @@ namespace
     params.boundary_conditions.function_id =
         Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 2}, {3, 2}});
 
+    return params;
+  }
+
+  struct GeneratedTreeTopology
+  {
+    std::unordered_map<int, std::vector<double>> coordinates;
+    std::unordered_map<int, std::vector<int>> element_nodes;
+    std::unordered_map<int, int> generation;
+    std::unordered_map<int, double> radii;
+    std::vector<int> leaf_elements;
+    std::vector<int> leaf_nodes;
+    int num_nodes = 0;
+    int num_elements = 0;
+  };
+
+  GeneratedTreeTopology make_asymmetric_test_tree_topology(int leaf_count)
+  {
+    GeneratedTreeTopology topology;
+    topology.coordinates[1] = {0.0, 0.0, 0.0};
+    int next_node = 1;
+    int next_element = 1;
+
+    const auto add_element = [&](int inlet_node, int generation, double x, double y)
+    {
+      const int element = next_element++;
+      const int outlet_node = ++next_node;
+      topology.coordinates[outlet_node] = {x, y, 0.0};
+      topology.element_nodes[element] = {inlet_node, outlet_node};
+      topology.generation[element] = generation;
+      topology.radii[element] = 1.0 / (1.0 + 0.02 * static_cast<double>(element - 1));
+      return std::pair<int, int>{element, outlet_node};
+    };
+
+    const auto [root_element, root_outlet_node] = add_element(1, 0, 1.0, 0.0);
+    (void)root_element;
+
+    std::function<void(int, int, int, double, double)> add_subtree =
+        [&](int inlet_node, int depth, int leaves, double y, double span)
+    {
+      const auto [element, outlet_node] =
+          add_element(inlet_node, depth, static_cast<double>(depth + 1), y);
+      if (leaves == 1)
+      {
+        topology.leaf_elements.push_back(element);
+        topology.leaf_nodes.push_back(outlet_node);
+        return;
+      }
+
+      const int left_leaves = leaves / 2;
+      const int right_leaves = leaves - left_leaves;
+      add_subtree(outlet_node, depth + 1, left_leaves, y + span, 0.5 * span);
+      add_subtree(outlet_node, depth + 1, right_leaves, y - span, 0.5 * span);
+    };
+    add_subtree(root_outlet_node, 1, leaf_count, 0.0, 1.0);
+
+    topology.num_nodes = next_node;
+    topology.num_elements = next_element - 1;
+    return topology;
+  }
+
+  void set_pressure_boundaries_for_test_tree(
+      ReducedLungParameters& params, const std::vector<int>& leaf_nodes)
+  {
+    std::unordered_map<int, int> boundary_nodes{{1, 1}};
+    std::unordered_map<int, int> function_ids{{1, 1}};
+    int condition = 2;
+    for (const int leaf_node : leaf_nodes)
+    {
+      boundary_nodes[condition] = leaf_node;
+      function_ids[condition] = 2;
+      ++condition;
+    }
+
+    params.boundary_conditions.num_conditions = static_cast<int>(boundary_nodes.size());
+    params.boundary_conditions.bc_type = Core::IO::InputField<BoundaryType>(BoundaryType::Pressure);
+    params.boundary_conditions.node_id = Core::IO::InputField<int>(boundary_nodes);
+    params.boundary_conditions.value_source =
+        ReducedLungParameters::BoundaryConditions::ValueSource::bc_function_id;
+    params.boundary_conditions.function_id = Core::IO::InputField<int>(function_ids);
+  }
+
+  ReducedLungParameters make_large_asymmetric_airway_parameters(
+      double dt, WallModelType wall_model_type)
+  {
+    constexpr int leaf_count = 13;
+    const auto topology = make_asymmetric_test_tree_topology(leaf_count);
+
+    ReducedLungParameters params{};
+    set_common_air_properties(params);
+    params.dynamics = make_dynamics(dt);
+    params.lung_tree.topology.num_nodes = topology.num_nodes;
+    params.lung_tree.topology.num_elements = topology.num_elements;
+    params.lung_tree.topology.node_coordinates =
+        Core::IO::InputField<std::vector<double>>(topology.coordinates);
+    params.lung_tree.topology.element_nodes =
+        Core::IO::InputField<std::vector<int>>(topology.element_nodes);
+    params.lung_tree.element_type = Core::IO::InputField<ElementType>(ElementType::Airway);
+    params.lung_tree.generation = Core::IO::InputField<int>(topology.generation);
+    set_airway_model(params, topology.radii, ResistanceType::Linear, wall_model_type);
+    set_linear_terminal_unit_model(params);
+    set_pressure_boundaries_for_test_tree(params, topology.leaf_nodes);
+    return params;
+  }
+
+  ReducedLungParameters make_large_mixed_airway_terminal_unit_parameters(double dt)
+  {
+    constexpr int leaf_count = 13;
+    const auto topology = make_asymmetric_test_tree_topology(leaf_count);
+
+    ReducedLungParameters params{};
+    set_common_air_properties(params);
+    params.dynamics = make_dynamics(dt);
+    params.lung_tree.topology.num_nodes = topology.num_nodes;
+    params.lung_tree.topology.num_elements = topology.num_elements;
+    params.lung_tree.topology.node_coordinates =
+        Core::IO::InputField<std::vector<double>>(topology.coordinates);
+    params.lung_tree.topology.element_nodes =
+        Core::IO::InputField<std::vector<int>>(topology.element_nodes);
+
+    std::unordered_map<int, ElementType> element_types;
+    std::unordered_map<int, int> generation;
+    std::unordered_map<int, double> airway_radii;
+    std::unordered_map<int, WallModelType> wall_models;
+    for (const auto& [element, nodes] : topology.element_nodes)
+    {
+      (void)nodes;
+      const bool is_leaf = std::find(topology.leaf_elements.begin(), topology.leaf_elements.end(),
+                               element) != topology.leaf_elements.end();
+      if (is_leaf)
+      {
+        element_types[element] = ElementType::TerminalUnit;
+        generation[element] = -1;
+      }
+      else
+      {
+        element_types[element] = ElementType::Airway;
+        generation[element] = topology.generation.at(element);
+        airway_radii[element] = topology.radii.at(element);
+        wall_models[element] = element % 3 == 0 ? WallModelType::KelvinVoigt : WallModelType::Rigid;
+      }
+    }
+
+    params.lung_tree.element_type = Core::IO::InputField<ElementType>(element_types);
+    params.lung_tree.generation = Core::IO::InputField<int>(generation);
+    params.lung_tree.airways.radius = Core::IO::InputField<double>(airway_radii);
+    params.lung_tree.airways.flow_model.resistance_type =
+        Core::IO::InputField<ResistanceType>(ResistanceType::Linear);
+    params.lung_tree.airways.flow_model.include_inertia = Core::IO::InputField<bool>(false);
+    params.lung_tree.airways.wall_model_type = Core::IO::InputField<WallModelType>(wall_models);
+    params.lung_tree.airways.wall_model.kelvin_voigt.elasticity.wall_poisson_ratio =
+        Core::IO::InputField<double>(0.3);
+    params.lung_tree.airways.wall_model.kelvin_voigt.elasticity.wall_elasticity =
+        Core::IO::InputField<double>(50000.0);
+    params.lung_tree.airways.wall_model.kelvin_voigt.elasticity.wall_thickness =
+        Core::IO::InputField<double>(0.001);
+    params.lung_tree.airways.wall_model.kelvin_voigt.viscosity.viscous_time_constant =
+        Core::IO::InputField<double>(0.01);
+    params.lung_tree.airways.wall_model.kelvin_voigt.viscosity.viscous_phase_shift =
+        Core::IO::InputField<double>(0.1);
+    set_linear_terminal_unit_model(params);
+    set_pressure_boundaries_for_test_tree(params, topology.leaf_nodes);
     return params;
   }
 
@@ -733,6 +896,109 @@ namespace
     }
   }
 
+  void expect_forced_batch_tree_profile(const TreeNewtonLinearSolverProfile& profile,
+      std::size_t element_count, std::size_t solve_count = 1)
+  {
+    EXPECT_EQ(profile.dense_solve_count, static_cast<std::uint64_t>(element_count * solve_count));
+    EXPECT_EQ(profile.dense_fallback_count, 0u);
+    EXPECT_EQ(profile.unsupported_block_fallback_count, 0u);
+    if (profile.simd_group_count > 0)
+    {
+      EXPECT_GT(profile.simd_lane_count, 0u);
+      EXPECT_EQ(profile.scalar_group_count, 0u);
+      EXPECT_EQ(profile.scalar_tail_lane_count, 0u);
+    }
+  }
+
+  void compare_forced_batch_structured_tree_and_sparse_corrections(
+      const std::string& name, const ReducedLungParameters& params, bool seed_nonzero_state)
+  {
+    LinearSolverFixture fixture(name, params, {"1.0 * t", "0.0"});
+    const double current_time = params.dynamics.time_increment;
+
+    if (seed_nonzero_state)
+    {
+      seed_nonzero_initial_state(fixture);
+    }
+    fixture.sync_state_from_x();
+    auto residual = fixture.assemble_residual(current_time);
+    fixture.assemble_jacobian(current_time);
+
+    Core::LinAlg::Vector<double> sparse_delta(*fixture.row_map, true);
+    Core::LinAlg::Vector<double> tree_delta(*fixture.row_map, true);
+    SparseNewtonLinearSolver sparse_solver(SparseNewtonLinearSolverContext{
+        .comm = MPI_COMM_WORLD,
+        .linear_solver_parameters = fixture.solver_params,
+        .solver_params_callback = fixture.solver_params_callback,
+        .correction_map = *fixture.row_map,
+    });
+    const NewtonLinearSystemMetadata metadata{.current_time = current_time,
+        .time_step_size_dt = params.dynamics.time_increment,
+        .nonlinear_iteration = 0};
+    sparse_solver.solve(*fixture.sysmat, residual, *fixture.x, metadata, sparse_delta);
+
+    const auto tree_metadata = fixture.build_tree_metadata();
+    auto tree_linearization = fixture.assemble_tree_linearization(current_time);
+    TreeNewtonLinearSolverProfile profile;
+    TreeNewtonLinearSolver tree_solver(TreeNewtonLinearSolverContext{.tree_metadata = tree_metadata,
+        .pivot_tolerance = 1.0e-12,
+        .coefficient_source = TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks,
+        .profile = &profile,
+        .force_batch_tree_solve = true,
+        .error_on_dense_fallback = true});
+    tree_solver.set_tree_linearization(tree_linearization);
+    tree_solver.solve(*fixture.sysmat, residual, *fixture.x, metadata, tree_delta);
+
+    expect_vectors_near(sparse_delta, tree_delta, 1.0e-9);
+    expect_forced_batch_tree_profile(profile, tree_metadata.elements.size());
+  }
+
+  void compare_reused_forced_batch_structured_tree_solver_corrections(
+      const std::string& name, const ReducedLungParameters& params)
+  {
+    LinearSolverFixture fixture(name, params, {"0.25 + 0.5 * t", "0.0"});
+    const auto tree_metadata = fixture.build_tree_metadata();
+    TreeNewtonLinearSolverProfile profile;
+    TreeNewtonLinearSolver tree_solver(TreeNewtonLinearSolverContext{.tree_metadata = tree_metadata,
+        .pivot_tolerance = 1.0e-12,
+        .coefficient_source = TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks,
+        .profile = &profile,
+        .force_batch_tree_solve = true,
+        .error_on_dense_fallback = true});
+    SparseNewtonLinearSolver sparse_solver(SparseNewtonLinearSolverContext{
+        .comm = MPI_COMM_WORLD,
+        .linear_solver_parameters = fixture.solver_params,
+        .solver_params_callback = fixture.solver_params_callback,
+        .correction_map = *fixture.row_map,
+    });
+
+    const std::vector<double> state_scales{0.75, 1.0, 1.25};
+    for (std::size_t step = 0; step < state_scales.size(); ++step)
+    {
+      seed_nonzero_initial_state(fixture, state_scales[step]);
+      fixture.sync_state_from_x();
+      const double current_time = params.dynamics.time_increment * static_cast<double>(step + 1);
+      auto residual = fixture.assemble_residual(current_time);
+      fixture.sysmat = std::make_unique<Core::LinAlg::SparseMatrix>(
+          *fixture.row_map, *fixture.locally_relevant_dof_map, 4);
+      fixture.assemble_jacobian(current_time);
+      auto tree_linearization = fixture.assemble_tree_linearization(current_time);
+      tree_solver.set_tree_linearization(tree_linearization);
+
+      Core::LinAlg::Vector<double> sparse_delta(*fixture.row_map, true);
+      Core::LinAlg::Vector<double> tree_delta(*fixture.row_map, true);
+      const NewtonLinearSystemMetadata metadata{.current_time = current_time,
+          .time_step_size_dt = params.dynamics.time_increment,
+          .nonlinear_iteration = static_cast<unsigned int>(step)};
+      sparse_solver.solve(*fixture.sysmat, residual, *fixture.x, metadata, sparse_delta);
+      tree_solver.solve(*fixture.sysmat, residual, *fixture.x, metadata, tree_delta);
+
+      expect_vectors_near(sparse_delta, tree_delta, 1.0e-9);
+    }
+
+    expect_forced_batch_tree_profile(profile, tree_metadata.elements.size(), state_scales.size());
+  }
+
   struct ComparisonChecks
   {
     bool terminal_unit_volumes = false;
@@ -890,6 +1156,27 @@ namespace
   {
     compare_reused_structured_tree_solver_corrections(
         "tree_linear_reused_structured_solver", make_mixed_airway_terminal_unit_parameters(0.1));
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests, ForcedBatchLargeRigidAirwaysMatchSparseSolver)
+  {
+    compare_forced_batch_structured_tree_and_sparse_corrections(
+        "tree_linear_forced_batch_large_rigid_airways",
+        make_large_asymmetric_airway_parameters(0.1, WallModelType::Rigid), false);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests, ForcedBatchLargeKelvinVoigtAirwaysMatchSparseSolver)
+  {
+    compare_forced_batch_structured_tree_and_sparse_corrections(
+        "tree_linear_forced_batch_large_kelvin_voigt_airways",
+        make_large_asymmetric_airway_parameters(0.1, WallModelType::KelvinVoigt), true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests, ReusedForcedBatchMixedTreeSolverMatchesSparseSolver)
+  {
+    compare_reused_forced_batch_structured_tree_solver_corrections(
+        "tree_linear_reused_forced_batch_mixed_solver",
+        make_large_mixed_airway_terminal_unit_parameters(0.1));
   }
 
   TEST(ReducedLungTreeWorkflowTests, SingleTerminalUnitMatchesNoxAndNewtonSparse)
