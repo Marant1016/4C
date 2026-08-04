@@ -1423,8 +1423,208 @@ namespace ReducedLung
         rhs_shift += flow_child_coeff * child_flow_intercept;
       };
 
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+      const auto require_structured_coefficients =
+          [&](const tree_solver_simd::Double& values, const char* context)
+      {
+        FOUR_C_ASSERT_ALWAYS(std::experimental::all_of(std::experimental::abs(values) >
+                                                       tree_solver_simd::Double(pivot_tolerance_)),
+            "TreeNewtonLinearSolver missing or near-zero matrix coefficient for {}.", context);
+      };
+
+      const auto assemble_2x2_equation_rows_structured_chunk = [&](int chunk_begin)
+      {
+        const auto load_rhs = [&](int grouped_index, int equation_offset)
+        {
+          const int equation_begin =
+              grouped_equation_begin_[static_cast<std::size_t>(grouped_index)];
+          return rhs_value(
+              residual, equation_rows_[static_cast<std::size_t>(equation_begin + equation_offset)]);
+        };
+        const auto load_inlet_coefficient = [&](int grouped_index, int unknown_offset)
+        {
+          const int unknown_begin = grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+          return equation_inlet_pressure_coefficient_values_[static_cast<std::size_t>(
+              unknown_begin + unknown_offset)];
+        };
+        const auto load_matrix_coefficient = [&](int grouped_index, int matrix_offset)
+        {
+          const int matrix_begin = grouped_matrix_begin_[static_cast<std::size_t>(grouped_index)];
+          return matrix_coefficient_values_[static_cast<std::size_t>(matrix_begin + matrix_offset)];
+        };
+        const auto store_rhs_constant = [&](int grouped_index, int unknown_offset, double value)
+        {
+          const int unknown_begin = grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+          workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin + unknown_offset)] = value;
+        };
+        const auto store_rhs_inlet_pressure =
+            [&](int grouped_index, int unknown_offset, double value)
+        {
+          const int unknown_begin = grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+          workspace_rhs_inlet_pressure_[static_cast<std::size_t>(unknown_begin + unknown_offset)] =
+              value;
+        };
+        const auto store_matrix = [&](int grouped_index, int matrix_offset, double value)
+        {
+          const int matrix_begin = grouped_matrix_begin_[static_cast<std::size_t>(grouped_index)];
+          workspace_matrix_[static_cast<std::size_t>(matrix_begin + matrix_offset)] = value;
+        };
+
+        const tree_solver_simd::Double rhs0 = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_rhs(grouped_index, 0); });
+        const tree_solver_simd::Double rhs1 = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_rhs(grouped_index, 1); });
+        const tree_solver_simd::Double rhs_inlet0 = -tree_solver_simd::gather(chunk_begin,
+            [&](int grouped_index) { return load_inlet_coefficient(grouped_index, 0); });
+        const tree_solver_simd::Double rhs_inlet1 = -tree_solver_simd::gather(chunk_begin,
+            [&](int grouped_index) { return load_inlet_coefficient(grouped_index, 1); });
+        const tree_solver_simd::Double a00 = tree_solver_simd::gather(chunk_begin,
+            [&](int grouped_index) { return load_matrix_coefficient(grouped_index, 0); });
+        const tree_solver_simd::Double a01 = tree_solver_simd::gather(chunk_begin,
+            [&](int grouped_index) { return load_matrix_coefficient(grouped_index, 1); });
+        const tree_solver_simd::Double a10 = tree_solver_simd::gather(chunk_begin,
+            [&](int grouped_index) { return load_matrix_coefficient(grouped_index, 2); });
+        const tree_solver_simd::Double a11 = tree_solver_simd::gather(chunk_begin,
+            [&](int grouped_index) { return load_matrix_coefficient(grouped_index, 3); });
+
+        tree_solver_simd::scatter(rhs0, chunk_begin,
+            [&](int grouped_index, double value) { store_rhs_constant(grouped_index, 0, value); });
+        tree_solver_simd::scatter(rhs1, chunk_begin,
+            [&](int grouped_index, double value) { store_rhs_constant(grouped_index, 1, value); });
+        tree_solver_simd::scatter(rhs_inlet0, chunk_begin, [&](int grouped_index, double value)
+            { store_rhs_inlet_pressure(grouped_index, 0, value); });
+        tree_solver_simd::scatter(rhs_inlet1, chunk_begin, [&](int grouped_index, double value)
+            { store_rhs_inlet_pressure(grouped_index, 1, value); });
+        tree_solver_simd::scatter(a00, chunk_begin,
+            [&](int grouped_index, double value) { store_matrix(grouped_index, 0, value); });
+        tree_solver_simd::scatter(a01, chunk_begin,
+            [&](int grouped_index, double value) { store_matrix(grouped_index, 1, value); });
+        tree_solver_simd::scatter(a10, chunk_begin,
+            [&](int grouped_index, double value) { store_matrix(grouped_index, 2, value); });
+        tree_solver_simd::scatter(a11, chunk_begin,
+            [&](int grouped_index, double value) { store_matrix(grouped_index, 3, value); });
+      };
+
+      const auto add_2x2_child_contribution_structured_chunk =
+          [&](int chunk_begin, int child_slot, tree_solver_simd::Double& rhs_shift)
+      {
+        const auto child_interface_index = [&](int grouped_index)
+        { return grouped_child_begin_[static_cast<std::size_t>(grouped_index)] + child_slot; };
+        const auto load_child_value = [&](int grouped_index,
+                                          const std::vector<double>& values) -> double
+        { return values[static_cast<std::size_t>(child_interface_index(grouped_index))]; };
+        const auto load_pressure_rhs = [&](int grouped_index)
+        {
+          const int child_index = child_interface_index(grouped_index);
+          return rhs_value(residual, pressure_row_[static_cast<std::size_t>(child_index)]);
+        };
+        const auto load_subtree_G = [&](int grouped_index)
+        {
+          const int child_index = child_interface_index(grouped_index);
+          const int element_index = child_element_index_[static_cast<std::size_t>(child_index)];
+          return subtree_relation_G_[static_cast<std::size_t>(element_index)];
+        };
+        const auto load_subtree_h = [&](int grouped_index)
+        {
+          const int child_index = child_interface_index(grouped_index);
+          const int element_index = child_element_index_[static_cast<std::size_t>(child_index)];
+          return subtree_relation_h_[static_cast<std::size_t>(element_index)];
+        };
+
+        const tree_solver_simd::Double pressure_parent_coeff = tree_solver_simd::gather(chunk_begin,
+            [&](int grouped_index)
+            { return load_child_value(grouped_index, child_pressure_parent_coefficient_values_); });
+        const tree_solver_simd::Double pressure_child_coeff = tree_solver_simd::gather(chunk_begin,
+            [&](int grouped_index)
+            { return load_child_value(grouped_index, child_pressure_child_coefficient_values_); });
+        const tree_solver_simd::Double pressure_rhs = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_pressure_rhs(grouped_index); });
+
+        require_structured_coefficients(
+            pressure_parent_coeff, "pressure-continuity parent pressure");
+        require_structured_coefficients(pressure_child_coeff, "pressure-continuity child pressure");
+
+        const tree_solver_simd::Double child_pressure_slope =
+            -pressure_parent_coeff / pressure_child_coeff;
+        const tree_solver_simd::Double child_pressure_intercept =
+            pressure_rhs / pressure_child_coeff;
+
+        tree_solver_simd::scatter(child_pressure_slope, chunk_begin,
+            [&](int grouped_index, double value)
+            {
+              const std::size_t child_index =
+                  static_cast<std::size_t>(child_interface_index(grouped_index));
+              child_pressure_slope_[child_index] = value;
+            });
+        tree_solver_simd::scatter(child_pressure_intercept, chunk_begin,
+            [&](int grouped_index, double value)
+            {
+              const std::size_t child_index =
+                  static_cast<std::size_t>(child_interface_index(grouped_index));
+              child_pressure_intercept_[child_index] = value;
+            });
+
+        const tree_solver_simd::Double subtree_G = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_subtree_G(grouped_index); });
+        const tree_solver_simd::Double subtree_h = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_subtree_h(grouped_index); });
+        const tree_solver_simd::Double child_flow_slope = subtree_G * child_pressure_slope;
+        const tree_solver_simd::Double child_flow_intercept =
+            subtree_G * child_pressure_intercept + subtree_h;
+
+        const tree_solver_simd::Double flow_child_coeff =
+            tree_solver_simd::gather(chunk_begin, [&](int grouped_index)
+                { return load_child_value(grouped_index, child_flow_coefficient_values_); });
+        require_structured_coefficients(flow_child_coeff, "junction flow child-flow coefficient");
+
+        const tree_solver_simd::Double matrix_update = flow_child_coeff * child_flow_slope;
+        const tree_solver_simd::Double rhs_update = flow_child_coeff * child_flow_intercept;
+        tree_solver_simd::scatter(matrix_update, chunk_begin,
+            [&](int grouped_index, double value)
+            {
+              const int child_index = child_interface_index(grouped_index);
+              const int matrix_begin =
+                  grouped_matrix_begin_[static_cast<std::size_t>(grouped_index)];
+              const int parent_outlet_pressure_index =
+                  parent_outlet_pressure_unknown_index_[static_cast<std::size_t>(child_index)];
+              const int matrix_entry_index = matrix_begin + 2 + parent_outlet_pressure_index;
+              workspace_matrix_[static_cast<std::size_t>(matrix_entry_index)] += value;
+            });
+        rhs_shift += rhs_update;
+      };
+
+      const auto subtract_2x2_rhs_shift_structured_chunk =
+          [&](int chunk_begin, const tree_solver_simd::Double& rhs_shift)
+      {
+        tree_solver_simd::scatter(rhs_shift, chunk_begin,
+            [&](int grouped_index, double value)
+            {
+              const int unknown_begin =
+                  grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+              workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin + 1)] -= value;
+            });
+      };
+#endif
+
       const auto assemble_2x2_leaf_group = [&](const ElementGroup& group)
       {
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+        if (coefficient_source_ == TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks)
+        {
+          int grouped_index = group.begin;
+          const int simd_end = tree_solver_simd::full_chunk_end(group.begin, group.end);
+          for (; grouped_index < simd_end; grouped_index += tree_solver_simd::width())
+          {
+            assemble_2x2_equation_rows_structured_chunk(grouped_index);
+          }
+          for (; grouped_index < group.end; ++grouped_index)
+          {
+            add_2x2_equation_rows(
+                grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
+          }
+          return;
+        }
+#endif
         for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
         {
           add_2x2_equation_rows(grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
@@ -1433,6 +1633,34 @@ namespace ReducedLung
 
       const auto assemble_2x2_one_child_group = [&](const ElementGroup& group)
       {
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+        if (coefficient_source_ == TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks)
+        {
+          int grouped_index = group.begin;
+          const int simd_end = tree_solver_simd::full_chunk_end(group.begin, group.end);
+          for (; grouped_index < simd_end; grouped_index += tree_solver_simd::width())
+          {
+            assemble_2x2_equation_rows_structured_chunk(grouped_index);
+            tree_solver_simd::Double rhs_shift(0.0);
+            add_2x2_child_contribution_structured_chunk(grouped_index, 0, rhs_shift);
+            subtract_2x2_rhs_shift_structured_chunk(grouped_index, rhs_shift);
+          }
+          for (; grouped_index < group.end; ++grouped_index)
+          {
+            const int element_index =
+                grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+            const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+            add_2x2_equation_rows(element_index);
+
+            double rhs_shift = 0.0;
+            add_2x2_child_contribution(child_interface_offset_[element_index_size],
+                matrix_offset_[element_index_size] + 2, rhs_shift);
+            workspace_rhs_constant_[static_cast<std::size_t>(
+                unknown_offset_[element_index_size] + 1)] -= rhs_shift;
+          }
+          return;
+        }
+#endif
         for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
         {
           const int element_index =
@@ -1450,6 +1678,38 @@ namespace ReducedLung
 
       const auto assemble_2x2_two_child_group = [&](const ElementGroup& group)
       {
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+        if (coefficient_source_ == TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks)
+        {
+          int grouped_index = group.begin;
+          const int simd_end = tree_solver_simd::full_chunk_end(group.begin, group.end);
+          for (; grouped_index < simd_end; grouped_index += tree_solver_simd::width())
+          {
+            assemble_2x2_equation_rows_structured_chunk(grouped_index);
+            tree_solver_simd::Double rhs_shift(0.0);
+            add_2x2_child_contribution_structured_chunk(grouped_index, 0, rhs_shift);
+            add_2x2_child_contribution_structured_chunk(grouped_index, 1, rhs_shift);
+            subtract_2x2_rhs_shift_structured_chunk(grouped_index, rhs_shift);
+          }
+          for (; grouped_index < group.end; ++grouped_index)
+          {
+            const int element_index =
+                grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+            const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+            add_2x2_equation_rows(element_index);
+
+            const int child_begin = child_interface_offset_[element_index_size];
+            double rhs_shift = 0.0;
+            add_2x2_child_contribution(
+                child_begin, matrix_offset_[element_index_size] + 2, rhs_shift);
+            add_2x2_child_contribution(
+                child_begin + 1, matrix_offset_[element_index_size] + 2, rhs_shift);
+            workspace_rhs_constant_[static_cast<std::size_t>(
+                unknown_offset_[element_index_size] + 1)] -= rhs_shift;
+          }
+          return;
+        }
+#endif
         for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
         {
           const int element_index =
@@ -1824,7 +2084,8 @@ namespace ReducedLung
         FOUR_C_ASSERT_ALWAYS(group.child_count >= 0 && group.child_count <= 2,
             "TreeNewtonLinearSolver 2x2 top-down group has unsupported child count {}.",
             group.child_count);
-        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+
+        const auto recover_2x2_top_down_lane = [&](int grouped_index)
         {
           const int element_index =
               grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
@@ -1849,7 +2110,7 @@ namespace ReducedLung
 
           if (group.child_count == 0)
           {
-            continue;
+            return;
           }
 
           const int outlet_pressure_index = outlet_pressure_unknown_index_[element_index_size];
@@ -1869,7 +2130,163 @@ namespace ReducedLung
                 child_pressure_intercept_[child_interface_index_size];
             set_inlet_pressure(child_element_index_[child_interface_index_size], child_pressure);
           }
+        };
+
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+        const auto recover_2x2_top_down_chunk = [&](int chunk_begin)
+        {
+          for (int lane = 0; lane < tree_solver_simd::width(); ++lane)
+          {
+            const int grouped_index = chunk_begin + lane;
+            const int element_index =
+                grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+            const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+            FOUR_C_ASSERT_ALWAYS(inlet_pressure_stamp_[element_index_size] == solve_stamp,
+                "TreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
+                global_element_id_[element_index_size] + 1);
+
+            set_delta_local_value(inlet_pressure_correction_local_dof_ids_[element_index_size],
+                inlet_pressure_by_element_[element_index_size]);
+          }
+
+          const tree_solver_simd::Double inlet_pressure = tree_solver_simd::gather(chunk_begin,
+              [&](int grouped_index)
+              {
+                const int element_index =
+                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                return inlet_pressure_by_element_[static_cast<std::size_t>(element_index)];
+              });
+          const tree_solver_simd::Double slope0 = tree_solver_simd::gather(chunk_begin,
+              [&](int grouped_index)
+              {
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                return workspace_slope_[static_cast<std::size_t>(unknown_begin)];
+              });
+          const tree_solver_simd::Double slope1 = tree_solver_simd::gather(chunk_begin,
+              [&](int grouped_index)
+              {
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                return workspace_slope_[static_cast<std::size_t>(unknown_begin + 1)];
+              });
+          const tree_solver_simd::Double intercept0 = tree_solver_simd::gather(chunk_begin,
+              [&](int grouped_index)
+              {
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                return workspace_intercept_[static_cast<std::size_t>(unknown_begin)];
+              });
+          const tree_solver_simd::Double intercept1 = tree_solver_simd::gather(chunk_begin,
+              [&](int grouped_index)
+              {
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                return workspace_intercept_[static_cast<std::size_t>(unknown_begin + 1)];
+              });
+
+          const tree_solver_simd::Double value0 = slope0 * inlet_pressure + intercept0;
+          const tree_solver_simd::Double value1 = slope1 * inlet_pressure + intercept1;
+          tree_solver_simd::scatter(value0, chunk_begin,
+              [&](int grouped_index, double value)
+              {
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                set_delta_local_value(
+                    unknown_correction_local_dof_ids_[static_cast<std::size_t>(unknown_begin)],
+                    value);
+              });
+          tree_solver_simd::scatter(value1, chunk_begin,
+              [&](int grouped_index, double value)
+              {
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                set_delta_local_value(
+                    unknown_correction_local_dof_ids_[static_cast<std::size_t>(unknown_begin + 1)],
+                    value);
+              });
+
+          if (group.child_count == 0)
+          {
+            return;
+          }
+
+          const tree_solver_simd::Double outlet_slope = tree_solver_simd::gather(chunk_begin,
+              [&](int grouped_index)
+              {
+                const int element_index =
+                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                const int outlet_pressure_index =
+                    outlet_pressure_unknown_index_[element_index_size];
+                return workspace_slope_[static_cast<std::size_t>(
+                    unknown_begin + outlet_pressure_index)];
+              });
+          const tree_solver_simd::Double outlet_intercept = tree_solver_simd::gather(chunk_begin,
+              [&](int grouped_index)
+              {
+                const int element_index =
+                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                const int outlet_pressure_index =
+                    outlet_pressure_unknown_index_[element_index_size];
+                return workspace_intercept_[static_cast<std::size_t>(
+                    unknown_begin + outlet_pressure_index)];
+              });
+          const tree_solver_simd::Double outlet_pressure =
+              outlet_slope * inlet_pressure + outlet_intercept;
+
+          for (int child_slot = 0; child_slot < group.child_count; ++child_slot)
+          {
+            const tree_solver_simd::Double child_pressure_slope = tree_solver_simd::gather(
+                chunk_begin,
+                [&](int grouped_index)
+                {
+                  const int child_interface_index =
+                      grouped_child_begin_[static_cast<std::size_t>(grouped_index)] + child_slot;
+                  return child_pressure_slope_[static_cast<std::size_t>(child_interface_index)];
+                });
+            const tree_solver_simd::Double child_pressure_intercept = tree_solver_simd::gather(
+                chunk_begin,
+                [&](int grouped_index)
+                {
+                  const int child_interface_index =
+                      grouped_child_begin_[static_cast<std::size_t>(grouped_index)] + child_slot;
+                  return child_pressure_intercept_[static_cast<std::size_t>(child_interface_index)];
+                });
+            const tree_solver_simd::Double child_pressure =
+                child_pressure_slope * outlet_pressure + child_pressure_intercept;
+            tree_solver_simd::scatter(child_pressure, chunk_begin,
+                [&](int grouped_index, double value)
+                {
+                  const int child_interface_index =
+                      grouped_child_begin_[static_cast<std::size_t>(grouped_index)] + child_slot;
+                  set_inlet_pressure(
+                      child_element_index_[static_cast<std::size_t>(child_interface_index)], value);
+                });
+          }
+        };
+
+        int grouped_index = group.begin;
+        const int simd_end = tree_solver_simd::full_chunk_end(group.begin, group.end);
+        for (; grouped_index < simd_end; grouped_index += tree_solver_simd::width())
+        {
+          recover_2x2_top_down_chunk(grouped_index);
         }
+        for (; grouped_index < group.end; ++grouped_index)
+        {
+          recover_2x2_top_down_lane(grouped_index);
+        }
+#else
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          recover_2x2_top_down_lane(grouped_index);
+        }
+#endif
       };
 
       const auto recover_top_down_group = [&](const ElementGroup& group)
