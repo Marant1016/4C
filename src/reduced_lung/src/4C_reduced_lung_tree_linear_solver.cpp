@@ -641,11 +641,7 @@ namespace ReducedLung
     }
 
     void solve_3x3_batch(int group_begin, int group_end,
-        const std::vector<int>& grouped_element_indices,
-        const std::vector<int>& grouped_unknown_begin, const std::vector<int>& grouped_matrix_begin,
-        std::vector<double>& matrix, std::vector<double>& rhs_constant,
-        std::vector<double>& rhs_inlet_pressure, std::vector<double>& intercept,
-        std::vector<double>& slope, bool inputs_already_packed, std::vector<double>& a00,
+        const std::vector<int>& grouped_element_indices, std::vector<double>& a00,
         std::vector<double>& a01, std::vector<double>& a02, std::vector<double>& a10,
         std::vector<double>& a11, std::vector<double>& a12, std::vector<double>& a20,
         std::vector<double>& a21, std::vector<double>& a22, std::vector<double>& rhs_constant0,
@@ -659,9 +655,7 @@ namespace ReducedLung
     {
       const int group_size = group_end - group_begin;
       FOUR_C_ASSERT_ALWAYS(group_size >= 0, "TreeNewtonLinearSolver 3x3 batch has invalid range.");
-      FOUR_C_ASSERT_ALWAYS(static_cast<int>(grouped_element_indices.size()) >= group_end &&
-                               static_cast<int>(grouped_unknown_begin.size()) >= group_end &&
-                               static_cast<int>(grouped_matrix_begin.size()) >= group_end,
+      FOUR_C_ASSERT_ALWAYS(static_cast<int>(grouped_element_indices.size()) >= group_end,
           "TreeNewtonLinearSolver 3x3 grouped cache is too small.");
       FOUR_C_ASSERT_ALWAYS(static_cast<int>(a00.size()) >= group_size &&
                                static_cast<int>(a01.size()) >= group_size &&
@@ -687,35 +681,6 @@ namespace ReducedLung
                                static_cast<int>(fallback_lanes.size()) >= group_size,
           "TreeNewtonLinearSolver 3x3 batch workspace is too small.");
 
-      if (!inputs_already_packed)
-      {
-        for (int lane = 0; lane < group_size; ++lane)
-        {
-          const int grouped_index = group_begin + lane;
-          const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
-          const int matrix_begin = grouped_matrix_begin[static_cast<std::size_t>(grouped_index)];
-          const std::size_t lane_index = static_cast<std::size_t>(lane);
-          a00[lane_index] = matrix[static_cast<std::size_t>(matrix_begin)];
-          a01[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 1)];
-          a02[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 2)];
-          a10[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 3)];
-          a11[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 4)];
-          a12[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 5)];
-          a20[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 6)];
-          a21[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 7)];
-          a22[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 8)];
-          rhs_constant0[lane_index] = rhs_constant[static_cast<std::size_t>(unknown_begin)];
-          rhs_constant1[lane_index] = rhs_constant[static_cast<std::size_t>(unknown_begin + 1)];
-          rhs_constant2[lane_index] = rhs_constant[static_cast<std::size_t>(unknown_begin + 2)];
-          rhs_inlet_pressure0[lane_index] =
-              rhs_inlet_pressure[static_cast<std::size_t>(unknown_begin)];
-          rhs_inlet_pressure1[lane_index] =
-              rhs_inlet_pressure[static_cast<std::size_t>(unknown_begin + 1)];
-          rhs_inlet_pressure2[lane_index] =
-              rhs_inlet_pressure[static_cast<std::size_t>(unknown_begin + 2)];
-        }
-      }
-
       int fallback_count = 0;
       const auto record_fallback_lane = [&](int lane)
       { fallback_lanes[static_cast<std::size_t>(fallback_count++)] = lane; };
@@ -730,15 +695,6 @@ namespace ReducedLung
         slope0[lane_index] = slope_value0;
         slope1[lane_index] = slope_value1;
         slope2[lane_index] = slope_value2;
-
-        const int grouped_index = group_begin + lane;
-        const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
-        intercept[static_cast<std::size_t>(unknown_begin)] = intercept_value0;
-        intercept[static_cast<std::size_t>(unknown_begin + 1)] = intercept_value1;
-        intercept[static_cast<std::size_t>(unknown_begin + 2)] = intercept_value2;
-        slope[static_cast<std::size_t>(unknown_begin)] = slope_value0;
-        slope[static_cast<std::size_t>(unknown_begin + 1)] = slope_value1;
-        slope[static_cast<std::size_t>(unknown_begin + 2)] = slope_value2;
       };
       const auto safe_pivot = [pivot_tolerance](double value)
       { return std::isfinite(value) && std::abs(value) > pivot_tolerance; };
@@ -826,20 +782,6 @@ namespace ReducedLung
             [&](int lane_index, double value)
             { output[static_cast<std::size_t>(lane_index)] = value; });
       };
-      const auto scatter_solution = [&](const tree_solver_simd::Double& values, int lane_begin,
-                                        int valid_end, int unknown_offset,
-                                        std::vector<double>& output)
-      {
-        tree_solver_simd::scatter_valid(values, lane_begin, valid_end,
-            [&](int lane_index, double value)
-            {
-              const int grouped_index = group_begin + lane_index;
-              const int unknown_begin =
-                  grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
-              output[static_cast<std::size_t>(unknown_begin + unknown_offset)] = value;
-            });
-      };
-
       const int padded_end = tree_solver_simd::padded_chunk_end(0, group_size);
       if (profile != nullptr && group_size > 0)
       {
@@ -937,12 +879,6 @@ namespace ReducedLung
         scatter_batch(slope_value0, lane, group_size, slope0);
         scatter_batch(slope_value1, lane, group_size, slope1);
         scatter_batch(slope_value2, lane, group_size, slope2);
-        scatter_solution(intercept_value0, lane, group_size, 0, intercept);
-        scatter_solution(intercept_value1, lane, group_size, 1, intercept);
-        scatter_solution(intercept_value2, lane, group_size, 2, intercept);
-        scatter_solution(slope_value0, lane, group_size, 0, slope);
-        scatter_solution(slope_value1, lane, group_size, 1, slope);
-        scatter_solution(slope_value2, lane, group_size, 2, slope);
       }
 #endif
 
@@ -2529,6 +2465,48 @@ namespace ReducedLung
         }
       };
 
+      const auto pack_3x3_group_from_workspace = [&](const ElementGroup& group)
+      {
+        FOUR_C_ASSERT_ALWAYS(group.block_size == 3,
+            "TreeNewtonLinearSolver can pack only 3x3 groups, got block size {}.",
+            group.block_size);
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          const std::size_t lane_index = static_cast<std::size_t>(grouped_index - group.begin);
+          const int unknown_begin = grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+          const int matrix_begin = grouped_matrix_begin_[static_cast<std::size_t>(grouped_index)];
+          batch_3x3_a00_[lane_index] = workspace_matrix_[static_cast<std::size_t>(matrix_begin)];
+          batch_3x3_a01_[lane_index] =
+              workspace_matrix_[static_cast<std::size_t>(matrix_begin + 1)];
+          batch_3x3_a02_[lane_index] =
+              workspace_matrix_[static_cast<std::size_t>(matrix_begin + 2)];
+          batch_3x3_a10_[lane_index] =
+              workspace_matrix_[static_cast<std::size_t>(matrix_begin + 3)];
+          batch_3x3_a11_[lane_index] =
+              workspace_matrix_[static_cast<std::size_t>(matrix_begin + 4)];
+          batch_3x3_a12_[lane_index] =
+              workspace_matrix_[static_cast<std::size_t>(matrix_begin + 5)];
+          batch_3x3_a20_[lane_index] =
+              workspace_matrix_[static_cast<std::size_t>(matrix_begin + 6)];
+          batch_3x3_a21_[lane_index] =
+              workspace_matrix_[static_cast<std::size_t>(matrix_begin + 7)];
+          batch_3x3_a22_[lane_index] =
+              workspace_matrix_[static_cast<std::size_t>(matrix_begin + 8)];
+          batch_3x3_rhs_constant0_[lane_index] =
+              workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin)];
+          batch_3x3_rhs_constant1_[lane_index] =
+              workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin + 1)];
+          batch_3x3_rhs_constant2_[lane_index] =
+              workspace_rhs_constant_[static_cast<std::size_t>(unknown_begin + 2)];
+          batch_3x3_rhs_inlet_pressure0_[lane_index] =
+              workspace_rhs_inlet_pressure_[static_cast<std::size_t>(unknown_begin)];
+          batch_3x3_rhs_inlet_pressure1_[lane_index] =
+              workspace_rhs_inlet_pressure_[static_cast<std::size_t>(unknown_begin + 1)];
+          batch_3x3_rhs_inlet_pressure2_[lane_index] =
+              workspace_rhs_inlet_pressure_[static_cast<std::size_t>(unknown_begin + 2)];
+        }
+      };
+
       const auto write_2x2_batch_solution_to_workspace = [&](const ElementGroup& group)
       {
         FOUR_C_ASSERT_ALWAYS(group.block_size == 2,
@@ -2545,6 +2523,29 @@ namespace ReducedLung
           workspace_slope_[static_cast<std::size_t>(unknown_begin)] = batch_2x2_slope0_[lane_index];
           workspace_slope_[static_cast<std::size_t>(unknown_begin + 1)] =
               batch_2x2_slope1_[lane_index];
+        }
+      };
+
+      const auto write_3x3_batch_solution_to_workspace = [&](const ElementGroup& group)
+      {
+        FOUR_C_ASSERT_ALWAYS(group.block_size == 3,
+            "TreeNewtonLinearSolver can write only 3x3 batch solutions, got block size {}.",
+            group.block_size);
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          const std::size_t lane_index = static_cast<std::size_t>(grouped_index - group.begin);
+          const int unknown_begin = grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+          workspace_intercept_[static_cast<std::size_t>(unknown_begin)] =
+              batch_3x3_intercept0_[lane_index];
+          workspace_intercept_[static_cast<std::size_t>(unknown_begin + 1)] =
+              batch_3x3_intercept1_[lane_index];
+          workspace_intercept_[static_cast<std::size_t>(unknown_begin + 2)] =
+              batch_3x3_intercept2_[lane_index];
+          workspace_slope_[static_cast<std::size_t>(unknown_begin)] = batch_3x3_slope0_[lane_index];
+          workspace_slope_[static_cast<std::size_t>(unknown_begin + 1)] =
+              batch_3x3_slope1_[lane_index];
+          workspace_slope_[static_cast<std::size_t>(unknown_begin + 2)] =
+              batch_3x3_slope2_[lane_index];
         }
       };
 
@@ -2642,19 +2643,21 @@ namespace ReducedLung
 #else
               const bool assembled_3x3_direct_soa = false;
 #endif
+              if (!assembled_3x3_direct_soa)
+              {
+                pack_3x3_group_from_workspace(group);
+              }
               const auto dense_solve_start =
                   profile_ != nullptr ? Clock::now() : Clock::time_point{};
-              solve_3x3_batch(group.begin, group.end, grouped_element_indices_,
-                  grouped_unknown_begin_, grouped_matrix_begin_, workspace_matrix_,
-                  workspace_rhs_constant_, workspace_rhs_inlet_pressure_, workspace_intercept_,
-                  workspace_slope_, assembled_3x3_direct_soa, batch_3x3_a00_, batch_3x3_a01_,
-                  batch_3x3_a02_, batch_3x3_a10_, batch_3x3_a11_, batch_3x3_a12_, batch_3x3_a20_,
-                  batch_3x3_a21_, batch_3x3_a22_, batch_3x3_rhs_constant0_,
+              solve_3x3_batch(group.begin, group.end, grouped_element_indices_, batch_3x3_a00_,
+                  batch_3x3_a01_, batch_3x3_a02_, batch_3x3_a10_, batch_3x3_a11_, batch_3x3_a12_,
+                  batch_3x3_a20_, batch_3x3_a21_, batch_3x3_a22_, batch_3x3_rhs_constant0_,
                   batch_3x3_rhs_constant1_, batch_3x3_rhs_constant2_,
                   batch_3x3_rhs_inlet_pressure0_, batch_3x3_rhs_inlet_pressure1_,
                   batch_3x3_rhs_inlet_pressure2_, batch_3x3_intercept0_, batch_3x3_intercept1_,
                   batch_3x3_intercept2_, batch_3x3_slope0_, batch_3x3_slope1_, batch_3x3_slope2_,
                   batch_3x3_fallback_lanes_, profile_, pivot_tolerance_, element_context_);
+              write_3x3_batch_solution_to_workspace(group);
               if (profile_ != nullptr)
               {
                 profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
