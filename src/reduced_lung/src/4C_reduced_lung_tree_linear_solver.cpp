@@ -2437,6 +2437,148 @@ namespace ReducedLung
         }
       };
 
+      const auto write_2x2_subtree_relation_group = [&](const ElementGroup& group)
+      {
+        FOUR_C_ASSERT_ALWAYS(group.block_size == 2,
+            "TreeNewtonLinearSolver 2x2 subtree relation group has block size {}.",
+            group.block_size);
+        [[maybe_unused]] const auto load_relation_value = [&](int grouped_index, bool load_slope)
+        {
+          const std::size_t lane_index = static_cast<std::size_t>(grouped_index - group.begin);
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const int flow_index = inlet_flow_unknown_index_[static_cast<std::size_t>(element_index)];
+          switch (flow_index)
+          {
+            case 0:
+              return load_slope ? batch_2x2_slope0_[lane_index] : batch_2x2_intercept0_[lane_index];
+            case 1:
+              return load_slope ? batch_2x2_slope1_[lane_index] : batch_2x2_intercept1_[lane_index];
+            default:
+              FOUR_C_THROW("TreeNewtonLinearSolver 2x2 subtree relation has invalid flow index {}.",
+                  flow_index);
+              return 0.0;
+          }
+        };
+        [[maybe_unused]] const auto write_relation_lane = [&](int grouped_index)
+        {
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+          subtree_relation_G_[element_index_size] = load_relation_value(grouped_index, true);
+          subtree_relation_h_[element_index_size] = load_relation_value(grouped_index, false);
+        };
+
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+        const auto write_relation_chunk = [&](int chunk_begin, int valid_end)
+        {
+          const tree_solver_simd::Double slope = tree_solver_simd::gather_or(chunk_begin, valid_end,
+              0.0, [&](int grouped_index) { return load_relation_value(grouped_index, true); });
+          const tree_solver_simd::Double intercept =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index) { return load_relation_value(grouped_index, false); });
+          tree_solver_simd::scatter_valid(slope, chunk_begin, valid_end,
+              [&](int grouped_index, double value)
+              {
+                const int element_index =
+                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                subtree_relation_G_[static_cast<std::size_t>(element_index)] = value;
+              });
+          tree_solver_simd::scatter_valid(intercept, chunk_begin, valid_end,
+              [&](int grouped_index, double value)
+              {
+                const int element_index =
+                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                subtree_relation_h_[static_cast<std::size_t>(element_index)] = value;
+              });
+        };
+
+        int grouped_index = group.begin;
+        const int padded_end = tree_solver_simd::padded_chunk_end(group.begin, group.end);
+        for (; grouped_index < padded_end; grouped_index += tree_solver_simd::width())
+        {
+          write_relation_chunk(grouped_index, group.end);
+        }
+#else
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          write_relation_lane(grouped_index);
+        }
+#endif
+      };
+
+      const auto write_3x3_subtree_relation_group = [&](const ElementGroup& group)
+      {
+        FOUR_C_ASSERT_ALWAYS(group.block_size == 3,
+            "TreeNewtonLinearSolver 3x3 subtree relation group has block size {}.",
+            group.block_size);
+        [[maybe_unused]] const auto load_relation_value = [&](int grouped_index, bool load_slope)
+        {
+          const std::size_t lane_index = static_cast<std::size_t>(grouped_index - group.begin);
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const int flow_index = inlet_flow_unknown_index_[static_cast<std::size_t>(element_index)];
+          switch (flow_index)
+          {
+            case 0:
+              return load_slope ? batch_3x3_slope0_[lane_index] : batch_3x3_intercept0_[lane_index];
+            case 1:
+              return load_slope ? batch_3x3_slope1_[lane_index] : batch_3x3_intercept1_[lane_index];
+            case 2:
+              return load_slope ? batch_3x3_slope2_[lane_index] : batch_3x3_intercept2_[lane_index];
+            default:
+              FOUR_C_THROW("TreeNewtonLinearSolver 3x3 subtree relation has invalid flow index {}.",
+                  flow_index);
+              return 0.0;
+          }
+        };
+        [[maybe_unused]] const auto write_relation_lane = [&](int grouped_index)
+        {
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+          subtree_relation_G_[element_index_size] = load_relation_value(grouped_index, true);
+          subtree_relation_h_[element_index_size] = load_relation_value(grouped_index, false);
+        };
+
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+        const auto write_relation_chunk = [&](int chunk_begin, int valid_end)
+        {
+          const tree_solver_simd::Double slope = tree_solver_simd::gather_or(chunk_begin, valid_end,
+              0.0, [&](int grouped_index) { return load_relation_value(grouped_index, true); });
+          const tree_solver_simd::Double intercept =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index) { return load_relation_value(grouped_index, false); });
+          tree_solver_simd::scatter_valid(slope, chunk_begin, valid_end,
+              [&](int grouped_index, double value)
+              {
+                const int element_index =
+                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                subtree_relation_G_[static_cast<std::size_t>(element_index)] = value;
+              });
+          tree_solver_simd::scatter_valid(intercept, chunk_begin, valid_end,
+              [&](int grouped_index, double value)
+              {
+                const int element_index =
+                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                subtree_relation_h_[static_cast<std::size_t>(element_index)] = value;
+              });
+        };
+
+        int grouped_index = group.begin;
+        const int padded_end = tree_solver_simd::padded_chunk_end(group.begin, group.end);
+        for (; grouped_index < padded_end; grouped_index += tree_solver_simd::width())
+        {
+          write_relation_chunk(grouped_index, group.end);
+        }
+#else
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          write_relation_lane(grouped_index);
+        }
+#endif
+      };
+
       const auto pack_2x2_group_from_workspace = [&](const ElementGroup& group)
       {
         FOUR_C_ASSERT_ALWAYS(group.block_size == 2,
@@ -2679,7 +2821,18 @@ namespace ReducedLung
               }
             }
 
-            write_subtree_relation_group(group);
+            if (group.block_size == 2)
+            {
+              write_2x2_subtree_relation_group(group);
+            }
+            else if (group.block_size == 3)
+            {
+              write_3x3_subtree_relation_group(group);
+            }
+            else
+            {
+              write_subtree_relation_group(group);
+            }
           }
         }
       }
