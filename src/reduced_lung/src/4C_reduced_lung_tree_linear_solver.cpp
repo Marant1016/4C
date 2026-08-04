@@ -568,13 +568,14 @@ namespace ReducedLung
     }
 
     void solve_3x3_batch(int group_begin, int group_end,
-        const std::vector<int>& grouped_element_indices, const std::vector<int>& unknown_offset,
-        const std::vector<int>& matrix_offset, std::vector<double>& matrix,
-        std::vector<double>& rhs_constant, std::vector<double>& rhs_inlet_pressure,
-        std::vector<double>& intercept, std::vector<double>& slope, std::vector<double>& a00,
-        std::vector<double>& a01, std::vector<double>& a02, std::vector<double>& a10,
-        std::vector<double>& a11, std::vector<double>& a12, std::vector<double>& a20,
-        std::vector<double>& a21, std::vector<double>& a22, std::vector<double>& rhs_constant0,
+        const std::vector<int>& grouped_element_indices,
+        const std::vector<int>& grouped_unknown_begin, const std::vector<int>& grouped_matrix_begin,
+        std::vector<double>& matrix, std::vector<double>& rhs_constant,
+        std::vector<double>& rhs_inlet_pressure, std::vector<double>& intercept,
+        std::vector<double>& slope, std::vector<double>& a00, std::vector<double>& a01,
+        std::vector<double>& a02, std::vector<double>& a10, std::vector<double>& a11,
+        std::vector<double>& a12, std::vector<double>& a20, std::vector<double>& a21,
+        std::vector<double>& a22, std::vector<double>& rhs_constant0,
         std::vector<double>& rhs_constant1, std::vector<double>& rhs_constant2,
         std::vector<double>& rhs_inlet_pressure0, std::vector<double>& rhs_inlet_pressure1,
         std::vector<double>& rhs_inlet_pressure2, std::vector<double>& intercept0,
@@ -585,6 +586,10 @@ namespace ReducedLung
     {
       const int group_size = group_end - group_begin;
       FOUR_C_ASSERT_ALWAYS(group_size >= 0, "TreeNewtonLinearSolver 3x3 batch has invalid range.");
+      FOUR_C_ASSERT_ALWAYS(static_cast<int>(grouped_element_indices.size()) >= group_end &&
+                               static_cast<int>(grouped_unknown_begin.size()) >= group_end &&
+                               static_cast<int>(grouped_matrix_begin.size()) >= group_end,
+          "TreeNewtonLinearSolver 3x3 grouped cache is too small.");
       FOUR_C_ASSERT_ALWAYS(static_cast<int>(a00.size()) >= group_size &&
                                static_cast<int>(a01.size()) >= group_size &&
                                static_cast<int>(a02.size()) >= group_size &&
@@ -611,10 +616,9 @@ namespace ReducedLung
 
       for (int lane = 0; lane < group_size; ++lane)
       {
-        const int element_index =
-            grouped_element_indices[static_cast<std::size_t>(group_begin + lane)];
-        const int unknown_begin = unknown_offset[static_cast<std::size_t>(element_index)];
-        const int matrix_begin = matrix_offset[static_cast<std::size_t>(element_index)];
+        const int grouped_index = group_begin + lane;
+        const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
+        const int matrix_begin = grouped_matrix_begin[static_cast<std::size_t>(grouped_index)];
         const std::size_t lane_index = static_cast<std::size_t>(lane);
         a00[lane_index] = matrix[static_cast<std::size_t>(matrix_begin)];
         a01[lane_index] = matrix[static_cast<std::size_t>(matrix_begin + 1)];
@@ -637,16 +641,39 @@ namespace ReducedLung
       }
 
       int fallback_count = 0;
+      const auto record_fallback_lane = [&](int lane)
+      { fallback_lanes[static_cast<std::size_t>(fallback_count++)] = lane; };
+      const auto write_solution = [&](int lane, double intercept_value0, double intercept_value1,
+                                      double intercept_value2, double slope_value0,
+                                      double slope_value1, double slope_value2)
+      {
+        const std::size_t lane_index = static_cast<std::size_t>(lane);
+        intercept0[lane_index] = intercept_value0;
+        intercept1[lane_index] = intercept_value1;
+        intercept2[lane_index] = intercept_value2;
+        slope0[lane_index] = slope_value0;
+        slope1[lane_index] = slope_value1;
+        slope2[lane_index] = slope_value2;
+
+        const int grouped_index = group_begin + lane;
+        const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
+        intercept[static_cast<std::size_t>(unknown_begin)] = intercept_value0;
+        intercept[static_cast<std::size_t>(unknown_begin + 1)] = intercept_value1;
+        intercept[static_cast<std::size_t>(unknown_begin + 2)] = intercept_value2;
+        slope[static_cast<std::size_t>(unknown_begin)] = slope_value0;
+        slope[static_cast<std::size_t>(unknown_begin + 1)] = slope_value1;
+        slope[static_cast<std::size_t>(unknown_begin + 2)] = slope_value2;
+      };
       const auto safe_pivot = [pivot_tolerance](double value)
       { return std::isfinite(value) && std::abs(value) > pivot_tolerance; };
-      for (int lane = 0; lane < group_size; ++lane)
+      const auto solve_3x3_direct_lane = [&](int lane)
       {
         const std::size_t lane_index = static_cast<std::size_t>(lane);
         const double p0 = a00[lane_index];
         if (!safe_pivot(p0))
         {
-          fallback_lanes[static_cast<std::size_t>(fallback_count++)] = lane;
-          continue;
+          record_fallback_lane(lane);
+          return;
         }
 
         const double l10 = a10[lane_index] / p0;
@@ -660,16 +687,16 @@ namespace ReducedLung
         if (!std::isfinite(l10) || !std::isfinite(l20) || !safe_pivot(p1) || !std::isfinite(u12) ||
             !std::isfinite(u21) || !std::isfinite(u22))
         {
-          fallback_lanes[static_cast<std::size_t>(fallback_count++)] = lane;
-          continue;
+          record_fallback_lane(lane);
+          return;
         }
 
         const double l21 = u21 / p1;
         const double p2 = u22 - l21 * u12;
         if (!std::isfinite(l21) || !safe_pivot(p2))
         {
-          fallback_lanes[static_cast<std::size_t>(fallback_count++)] = lane;
-          continue;
+          record_fallback_lane(lane);
+          return;
         }
 
         const auto solve_rhs = [&](double rhs0, double rhs1, double rhs2, double& value0,
@@ -697,35 +724,156 @@ namespace ReducedLung
             !std::isfinite(intercept_value2) || !std::isfinite(slope_value0) ||
             !std::isfinite(slope_value1) || !std::isfinite(slope_value2))
         {
-          fallback_lanes[static_cast<std::size_t>(fallback_count++)] = lane;
+          record_fallback_lane(lane);
+          return;
+        }
+
+        write_solution(lane, intercept_value0, intercept_value1, intercept_value2, slope_value0,
+            slope_value1, slope_value2);
+      };
+
+      int lane = 0;
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+      const auto load_batch = [](const std::vector<double>& values, int lane)
+      { return values[static_cast<std::size_t>(lane)]; };
+      const auto simd_safe_pivot = [&](const tree_solver_simd::Double& values)
+      {
+        return std::experimental::isfinite(values) &&
+               std::experimental::abs(values) > tree_solver_simd::Double(pivot_tolerance);
+      };
+      const auto simd_finite = [](const tree_solver_simd::Double& values)
+      { return std::experimental::isfinite(values); };
+      const auto scatter_batch =
+          [](const tree_solver_simd::Double& values, int lane_begin, std::vector<double>& output)
+      {
+        tree_solver_simd::scatter(values, lane_begin, [&](int lane_index, double value)
+            { output[static_cast<std::size_t>(lane_index)] = value; });
+      };
+      const auto scatter_solution = [&](const tree_solver_simd::Double& values, int lane_begin,
+                                        int unknown_offset, std::vector<double>& output)
+      {
+        tree_solver_simd::scatter(values, lane_begin,
+            [&](int lane_index, double value)
+            {
+              const int grouped_index = group_begin + lane_index;
+              const int unknown_begin =
+                  grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
+              output[static_cast<std::size_t>(unknown_begin + unknown_offset)] = value;
+            });
+      };
+
+      const int simd_end = tree_solver_simd::full_chunk_end(0, group_size);
+      for (; lane < simd_end; lane += tree_solver_simd::width())
+      {
+        const tree_solver_simd::Double p0 = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(a00, lane_index); });
+        const tree_solver_simd::Double a01_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(a01, lane_index); });
+        const tree_solver_simd::Double a02_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(a02, lane_index); });
+        const tree_solver_simd::Double a10_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(a10, lane_index); });
+        const tree_solver_simd::Double a11_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(a11, lane_index); });
+        const tree_solver_simd::Double a12_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(a12, lane_index); });
+        const tree_solver_simd::Double a20_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(a20, lane_index); });
+        const tree_solver_simd::Double a21_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(a21, lane_index); });
+        const tree_solver_simd::Double a22_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(a22, lane_index); });
+
+        const tree_solver_simd::Double l10 = a10_values / p0;
+        const tree_solver_simd::Double l20 = a20_values / p0;
+        const tree_solver_simd::Double p1 = a11_values - l10 * a01_values;
+        const tree_solver_simd::Double u12 = a12_values - l10 * a02_values;
+        const tree_solver_simd::Double u21 = a21_values - l20 * a01_values;
+        const tree_solver_simd::Double u22 = a22_values - l20 * a02_values;
+        const tree_solver_simd::Double l21 = u21 / p1;
+        const tree_solver_simd::Double p2 = u22 - l21 * u12;
+
+        const auto valid_pivots = simd_safe_pivot(p0) && simd_finite(l10) && simd_finite(l20) &&
+                                  simd_safe_pivot(p1) && simd_finite(u12) && simd_finite(u21) &&
+                                  simd_finite(u22) && simd_finite(l21) && simd_safe_pivot(p2);
+
+        const auto solve_rhs =
+            [&](const tree_solver_simd::Double& rhs0, const tree_solver_simd::Double& rhs1,
+                const tree_solver_simd::Double& rhs2, tree_solver_simd::Double& value0,
+                tree_solver_simd::Double& value1, tree_solver_simd::Double& value2)
+        {
+          const tree_solver_simd::Double y0 = rhs0;
+          const tree_solver_simd::Double y1 = rhs1 - l10 * y0;
+          const tree_solver_simd::Double y2 = rhs2 - l20 * y0 - l21 * y1;
+          value2 = y2 / p2;
+          value1 = (y1 - u12 * value2) / p1;
+          value0 = (y0 - a01_values * value1 - a02_values * value2) / p0;
+        };
+
+        const tree_solver_simd::Double rhs_constant0_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(rhs_constant0, lane_index); });
+        const tree_solver_simd::Double rhs_constant1_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(rhs_constant1, lane_index); });
+        const tree_solver_simd::Double rhs_constant2_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(rhs_constant2, lane_index); });
+        const tree_solver_simd::Double rhs_inlet_pressure0_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(rhs_inlet_pressure0, lane_index); });
+        const tree_solver_simd::Double rhs_inlet_pressure1_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(rhs_inlet_pressure1, lane_index); });
+        const tree_solver_simd::Double rhs_inlet_pressure2_values = tree_solver_simd::gather(
+            lane, [&](int lane_index) { return load_batch(rhs_inlet_pressure2, lane_index); });
+
+        tree_solver_simd::Double intercept_value0;
+        tree_solver_simd::Double intercept_value1;
+        tree_solver_simd::Double intercept_value2;
+        tree_solver_simd::Double slope_value0;
+        tree_solver_simd::Double slope_value1;
+        tree_solver_simd::Double slope_value2;
+        solve_rhs(rhs_constant0_values, rhs_constant1_values, rhs_constant2_values,
+            intercept_value0, intercept_value1, intercept_value2);
+        solve_rhs(rhs_inlet_pressure0_values, rhs_inlet_pressure1_values,
+            rhs_inlet_pressure2_values, slope_value0, slope_value1, slope_value2);
+
+        const auto valid_solution = valid_pivots && simd_finite(intercept_value0) &&
+                                    simd_finite(intercept_value1) &&
+                                    simd_finite(intercept_value2) && simd_finite(slope_value0) &&
+                                    simd_finite(slope_value1) && simd_finite(slope_value2);
+        if (!std::experimental::all_of(valid_solution))
+        {
+          for (int chunk_lane = 0; chunk_lane < tree_solver_simd::width(); ++chunk_lane)
+          {
+            record_fallback_lane(lane + chunk_lane);
+          }
           continue;
         }
 
-        intercept0[lane_index] = intercept_value0;
-        intercept1[lane_index] = intercept_value1;
-        intercept2[lane_index] = intercept_value2;
-        slope0[lane_index] = slope_value0;
-        slope1[lane_index] = slope_value1;
-        slope2[lane_index] = slope_value2;
+        scatter_batch(intercept_value0, lane, intercept0);
+        scatter_batch(intercept_value1, lane, intercept1);
+        scatter_batch(intercept_value2, lane, intercept2);
+        scatter_batch(slope_value0, lane, slope0);
+        scatter_batch(slope_value1, lane, slope1);
+        scatter_batch(slope_value2, lane, slope2);
+        scatter_solution(intercept_value0, lane, 0, intercept);
+        scatter_solution(intercept_value1, lane, 1, intercept);
+        scatter_solution(intercept_value2, lane, 2, intercept);
+        scatter_solution(slope_value0, lane, 0, slope);
+        scatter_solution(slope_value1, lane, 1, slope);
+        scatter_solution(slope_value2, lane, 2, slope);
+      }
+#endif
 
-        const int element_index =
-            grouped_element_indices[static_cast<std::size_t>(group_begin + lane)];
-        const int unknown_begin = unknown_offset[static_cast<std::size_t>(element_index)];
-        intercept[static_cast<std::size_t>(unknown_begin)] = intercept_value0;
-        intercept[static_cast<std::size_t>(unknown_begin + 1)] = intercept_value1;
-        intercept[static_cast<std::size_t>(unknown_begin + 2)] = intercept_value2;
-        slope[static_cast<std::size_t>(unknown_begin)] = slope_value0;
-        slope[static_cast<std::size_t>(unknown_begin + 1)] = slope_value1;
-        slope[static_cast<std::size_t>(unknown_begin + 2)] = slope_value2;
+      for (; lane < group_size; ++lane)
+      {
+        solve_3x3_direct_lane(lane);
       }
 
       for (int fallback_index = 0; fallback_index < fallback_count; ++fallback_index)
       {
         const int lane = fallback_lanes[static_cast<std::size_t>(fallback_index)];
-        const int element_index =
-            grouped_element_indices[static_cast<std::size_t>(group_begin + lane)];
-        const int unknown_begin = unknown_offset[static_cast<std::size_t>(element_index)];
-        const int matrix_begin = matrix_offset[static_cast<std::size_t>(element_index)];
+        const int grouped_index = group_begin + lane;
+        const int element_index = grouped_element_indices[static_cast<std::size_t>(grouped_index)];
+        const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
+        const int matrix_begin = grouped_matrix_begin[static_cast<std::size_t>(grouped_index)];
         solve_dense_system(matrix.data() + matrix_begin, rhs_constant.data() + unknown_begin,
             rhs_inlet_pressure.data() + unknown_begin, intercept.data() + unknown_begin,
             slope.data() + unknown_begin, 3, pivot_tolerance,
@@ -1967,11 +2115,11 @@ namespace ReducedLung
             {
               const auto dense_solve_start =
                   profile_ != nullptr ? Clock::now() : Clock::time_point{};
-              solve_3x3_batch(group.begin, group.end, grouped_element_indices_, unknown_offset_,
-                  matrix_offset_, workspace_matrix_, workspace_rhs_constant_,
-                  workspace_rhs_inlet_pressure_, workspace_intercept_, workspace_slope_,
-                  batch_3x3_a00_, batch_3x3_a01_, batch_3x3_a02_, batch_3x3_a10_, batch_3x3_a11_,
-                  batch_3x3_a12_, batch_3x3_a20_, batch_3x3_a21_, batch_3x3_a22_,
+              solve_3x3_batch(group.begin, group.end, grouped_element_indices_,
+                  grouped_unknown_begin_, grouped_matrix_begin_, workspace_matrix_,
+                  workspace_rhs_constant_, workspace_rhs_inlet_pressure_, workspace_intercept_,
+                  workspace_slope_, batch_3x3_a00_, batch_3x3_a01_, batch_3x3_a02_, batch_3x3_a10_,
+                  batch_3x3_a11_, batch_3x3_a12_, batch_3x3_a20_, batch_3x3_a21_, batch_3x3_a22_,
                   batch_3x3_rhs_constant0_, batch_3x3_rhs_constant1_, batch_3x3_rhs_constant2_,
                   batch_3x3_rhs_inlet_pressure0_, batch_3x3_rhs_inlet_pressure1_,
                   batch_3x3_rhs_inlet_pressure2_, batch_3x3_intercept0_, batch_3x3_intercept1_,
