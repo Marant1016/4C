@@ -412,25 +412,28 @@ namespace ReducedLung
     }
 
     void solve_2x2_batch(int group_begin, int group_end,
-        const std::vector<int>& grouped_element_indices, const std::vector<int>& unknown_offset,
-        const std::vector<int>& matrix_offset, std::vector<double>& matrix,
-        std::vector<double>& rhs_constant, std::vector<double>& rhs_inlet_pressure,
-        std::vector<double>& intercept, std::vector<double>& slope,
-        std::vector<int>& fallback_lanes, double pivot_tolerance,
+        const std::vector<int>& grouped_element_indices,
+        const std::vector<int>& grouped_unknown_begin, const std::vector<int>& grouped_matrix_begin,
+        std::vector<double>& matrix, std::vector<double>& rhs_constant,
+        std::vector<double>& rhs_inlet_pressure, std::vector<double>& intercept,
+        std::vector<double>& slope, std::vector<int>& fallback_lanes, double pivot_tolerance,
         const std::vector<std::string>& element_context)
     {
       const int group_size = group_end - group_begin;
       FOUR_C_ASSERT_ALWAYS(group_size >= 0, "TreeNewtonLinearSolver 2x2 batch has invalid range.");
+      FOUR_C_ASSERT_ALWAYS(static_cast<int>(grouped_element_indices.size()) >= group_end &&
+                               static_cast<int>(grouped_unknown_begin.size()) >= group_end &&
+                               static_cast<int>(grouped_matrix_begin.size()) >= group_end,
+          "TreeNewtonLinearSolver 2x2 grouped cache is too small.");
       FOUR_C_ASSERT_ALWAYS(static_cast<int>(fallback_lanes.size()) >= group_size,
           "TreeNewtonLinearSolver 2x2 batch workspace is too small.");
 
       int fallback_count = 0;
-      for (int lane = 0; lane < group_size; ++lane)
+      const auto solve_direct_lane = [&](int lane)
       {
-        const int element_index =
-            grouped_element_indices[static_cast<std::size_t>(group_begin + lane)];
-        const int unknown_begin = unknown_offset[static_cast<std::size_t>(element_index)];
-        const int matrix_begin = matrix_offset[static_cast<std::size_t>(element_index)];
+        const int grouped_index = group_begin + lane;
+        const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
+        const int matrix_begin = grouped_matrix_begin[static_cast<std::size_t>(grouped_index)];
         const double a00 = matrix[static_cast<std::size_t>(matrix_begin)];
         const double a01 = matrix[static_cast<std::size_t>(matrix_begin + 1)];
         const double a10 = matrix[static_cast<std::size_t>(matrix_begin + 2)];
@@ -446,7 +449,7 @@ namespace ReducedLung
         {
           fallback_lanes[static_cast<std::size_t>(fallback_count)] = lane;
           ++fallback_count;
-          continue;
+          return;
         }
 
         const double inverse_determinant = 1.0 / determinant;
@@ -458,15 +461,105 @@ namespace ReducedLung
             (rhs_inlet_pressure0 * a11 - a01 * rhs_inlet_pressure1) * inverse_determinant;
         slope[static_cast<std::size_t>(unknown_begin + 1)] =
             (a00 * rhs_inlet_pressure1 - rhs_inlet_pressure0 * a10) * inverse_determinant;
+      };
+
+      int lane = 0;
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+      const int simd_end = tree_solver_simd::full_chunk_end(0, group_size);
+      const auto load_matrix_entry = [&](int grouped_index, int entry_offset)
+      {
+        const int matrix_begin = grouped_matrix_begin[static_cast<std::size_t>(grouped_index)];
+        return matrix[static_cast<std::size_t>(matrix_begin + entry_offset)];
+      };
+      const auto load_rhs_constant = [&](int grouped_index, int unknown_offset)
+      {
+        const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
+        return rhs_constant[static_cast<std::size_t>(unknown_begin + unknown_offset)];
+      };
+      const auto load_rhs_inlet_pressure = [&](int grouped_index, int unknown_offset)
+      {
+        const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
+        return rhs_inlet_pressure[static_cast<std::size_t>(unknown_begin + unknown_offset)];
+      };
+      const auto store_intercept = [&](int grouped_index, int unknown_offset, double value)
+      {
+        const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
+        intercept[static_cast<std::size_t>(unknown_begin + unknown_offset)] = value;
+      };
+      const auto store_slope = [&](int grouped_index, int unknown_offset, double value)
+      {
+        const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
+        slope[static_cast<std::size_t>(unknown_begin + unknown_offset)] = value;
+      };
+
+      for (; lane < simd_end; lane += tree_solver_simd::width())
+      {
+        const int chunk_begin = group_begin + lane;
+        const tree_solver_simd::Double a00 = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_matrix_entry(grouped_index, 0); });
+        const tree_solver_simd::Double a01 = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_matrix_entry(grouped_index, 1); });
+        const tree_solver_simd::Double a10 = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_matrix_entry(grouped_index, 2); });
+        const tree_solver_simd::Double a11 = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_matrix_entry(grouped_index, 3); });
+        const tree_solver_simd::Double rhs_constant0 = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_rhs_constant(grouped_index, 0); });
+        const tree_solver_simd::Double rhs_constant1 = tree_solver_simd::gather(
+            chunk_begin, [&](int grouped_index) { return load_rhs_constant(grouped_index, 1); });
+        const tree_solver_simd::Double rhs_inlet_pressure0 = tree_solver_simd::gather(chunk_begin,
+            [&](int grouped_index) { return load_rhs_inlet_pressure(grouped_index, 0); });
+        const tree_solver_simd::Double rhs_inlet_pressure1 = tree_solver_simd::gather(chunk_begin,
+            [&](int grouped_index) { return load_rhs_inlet_pressure(grouped_index, 1); });
+
+        const tree_solver_simd::Double determinant = a00 * a11 - a01 * a10;
+        const auto valid_determinant =
+            std::experimental::isfinite(determinant) &&
+            std::experimental::abs(determinant) > tree_solver_simd::Double(pivot_tolerance);
+        if (!std::experimental::all_of(valid_determinant))
+        {
+          for (int chunk_lane = 0; chunk_lane < tree_solver_simd::width(); ++chunk_lane)
+          {
+            fallback_lanes[static_cast<std::size_t>(fallback_count)] = lane + chunk_lane;
+            ++fallback_count;
+          }
+          continue;
+        }
+
+        const tree_solver_simd::Double inverse_determinant =
+            tree_solver_simd::Double(1.0) / determinant;
+        const tree_solver_simd::Double intercept0 =
+            (rhs_constant0 * a11 - a01 * rhs_constant1) * inverse_determinant;
+        const tree_solver_simd::Double intercept1 =
+            (a00 * rhs_constant1 - rhs_constant0 * a10) * inverse_determinant;
+        const tree_solver_simd::Double slope0 =
+            (rhs_inlet_pressure0 * a11 - a01 * rhs_inlet_pressure1) * inverse_determinant;
+        const tree_solver_simd::Double slope1 =
+            (a00 * rhs_inlet_pressure1 - rhs_inlet_pressure0 * a10) * inverse_determinant;
+
+        tree_solver_simd::scatter(intercept0, chunk_begin,
+            [&](int grouped_index, double value) { store_intercept(grouped_index, 0, value); });
+        tree_solver_simd::scatter(intercept1, chunk_begin,
+            [&](int grouped_index, double value) { store_intercept(grouped_index, 1, value); });
+        tree_solver_simd::scatter(slope0, chunk_begin,
+            [&](int grouped_index, double value) { store_slope(grouped_index, 0, value); });
+        tree_solver_simd::scatter(slope1, chunk_begin,
+            [&](int grouped_index, double value) { store_slope(grouped_index, 1, value); });
+      }
+#endif
+
+      for (; lane < group_size; ++lane)
+      {
+        solve_direct_lane(lane);
       }
 
       for (int fallback_index = 0; fallback_index < fallback_count; ++fallback_index)
       {
         const int lane = fallback_lanes[static_cast<std::size_t>(fallback_index)];
-        const int element_index =
-            grouped_element_indices[static_cast<std::size_t>(group_begin + lane)];
-        const int unknown_begin = unknown_offset[static_cast<std::size_t>(element_index)];
-        const int matrix_begin = matrix_offset[static_cast<std::size_t>(element_index)];
+        const int grouped_index = group_begin + lane;
+        const int element_index = grouped_element_indices[static_cast<std::size_t>(grouped_index)];
+        const int unknown_begin = grouped_unknown_begin[static_cast<std::size_t>(grouped_index)];
+        const int matrix_begin = grouped_matrix_begin[static_cast<std::size_t>(grouped_index)];
         solve_dense_system(matrix.data() + matrix_begin, rhs_constant.data() + unknown_begin,
             rhs_inlet_pressure.data() + unknown_begin, intercept.data() + unknown_begin,
             slope.data() + unknown_begin, 2, pivot_tolerance,
@@ -1600,10 +1693,10 @@ namespace ReducedLung
             {
               const auto dense_solve_start =
                   profile_ != nullptr ? Clock::now() : Clock::time_point{};
-              solve_2x2_batch(group.begin, group.end, grouped_element_indices_, unknown_offset_,
-                  matrix_offset_, workspace_matrix_, workspace_rhs_constant_,
-                  workspace_rhs_inlet_pressure_, workspace_intercept_, workspace_slope_,
-                  batch_2x2_fallback_lanes_, pivot_tolerance_, element_context_);
+              solve_2x2_batch(group.begin, group.end, grouped_element_indices_,
+                  grouped_unknown_begin_, grouped_matrix_begin_, workspace_matrix_,
+                  workspace_rhs_constant_, workspace_rhs_inlet_pressure_, workspace_intercept_,
+                  workspace_slope_, batch_2x2_fallback_lanes_, pivot_tolerance_, element_context_);
               if (profile_ != nullptr)
               {
                 profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
