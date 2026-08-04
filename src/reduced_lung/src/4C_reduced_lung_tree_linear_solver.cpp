@@ -2979,6 +2979,251 @@ namespace ReducedLung
 #endif
       };
 
+      const auto recover_3x3_top_down_group = [&](const ElementGroup& group)
+      {
+        FOUR_C_ASSERT_ALWAYS(group.block_size == 3,
+            "TreeNewtonLinearSolver 3x3 top-down group has block size {}.", group.block_size);
+        FOUR_C_ASSERT_ALWAYS(group.child_count >= 0 && group.child_count <= 2,
+            "TreeNewtonLinearSolver 3x3 top-down group has unsupported child count {}.",
+            group.child_count);
+
+        [[maybe_unused]] const auto recover_3x3_top_down_lane = [&](int grouped_index)
+        {
+          const int element_index =
+              grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+          const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+          FOUR_C_ASSERT_ALWAYS(inlet_pressure_stamp_[element_index_size] == solve_stamp,
+              "TreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
+              global_element_id_[element_index_size] + 1);
+
+          const double inlet_pressure = inlet_pressure_by_element_[element_index_size];
+          set_delta_local_value(
+              inlet_pressure_correction_local_dof_ids_[element_index_size], inlet_pressure);
+
+          const int unknown_begin = unknown_offset_[element_index_size];
+          const std::size_t unknown0 = static_cast<std::size_t>(unknown_begin);
+          const std::size_t unknown1 = static_cast<std::size_t>(unknown_begin + 1);
+          const std::size_t unknown2 = static_cast<std::size_t>(unknown_begin + 2);
+          const double value0 =
+              workspace_slope_[unknown0] * inlet_pressure + workspace_intercept_[unknown0];
+          const double value1 =
+              workspace_slope_[unknown1] * inlet_pressure + workspace_intercept_[unknown1];
+          const double value2 =
+              workspace_slope_[unknown2] * inlet_pressure + workspace_intercept_[unknown2];
+          set_delta_local_value(unknown_correction_local_dof_ids_[unknown0], value0);
+          set_delta_local_value(unknown_correction_local_dof_ids_[unknown1], value1);
+          set_delta_local_value(unknown_correction_local_dof_ids_[unknown2], value2);
+
+          if (group.child_count == 0)
+          {
+            return;
+          }
+
+          const int outlet_pressure_index = outlet_pressure_unknown_index_[element_index_size];
+          const std::size_t outlet_pressure_unknown =
+              static_cast<std::size_t>(unknown_begin + outlet_pressure_index);
+          const double outlet_pressure =
+              workspace_slope_[outlet_pressure_unknown] * inlet_pressure +
+              workspace_intercept_[outlet_pressure_unknown];
+          const int child_begin = child_interface_offset_[element_index_size];
+          for (int child_slot = 0; child_slot < group.child_count; ++child_slot)
+          {
+            const int child_interface_index = child_begin + child_slot;
+            const std::size_t child_interface_index_size =
+                static_cast<std::size_t>(child_interface_index);
+            const double child_pressure =
+                child_pressure_slope_[child_interface_index_size] * outlet_pressure +
+                child_pressure_intercept_[child_interface_index_size];
+            set_inlet_pressure(child_element_index_[child_interface_index_size], child_pressure);
+          }
+        };
+
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+        const auto recover_3x3_top_down_chunk = [&](int chunk_begin, int valid_end)
+        {
+          tree_solver_simd::for_each_valid_lane(chunk_begin, valid_end,
+              [&](int grouped_index, int /*lane*/)
+              {
+                const int element_index =
+                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+                FOUR_C_ASSERT_ALWAYS(inlet_pressure_stamp_[element_index_size] == solve_stamp,
+                    "TreeNewtonLinearSolver missing inlet-pressure correction for element {}.",
+                    global_element_id_[element_index_size] + 1);
+
+                set_delta_local_value(inlet_pressure_correction_local_dof_ids_[element_index_size],
+                    inlet_pressure_by_element_[element_index_size]);
+              });
+
+          const tree_solver_simd::Double inlet_pressure =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index)
+                  {
+                    const int element_index =
+                        grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                    return inlet_pressure_by_element_[static_cast<std::size_t>(element_index)];
+                  });
+          const tree_solver_simd::Double slope0 =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index)
+                  {
+                    const int unknown_begin =
+                        grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                    return workspace_slope_[static_cast<std::size_t>(unknown_begin)];
+                  });
+          const tree_solver_simd::Double slope1 =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index)
+                  {
+                    const int unknown_begin =
+                        grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                    return workspace_slope_[static_cast<std::size_t>(unknown_begin + 1)];
+                  });
+          const tree_solver_simd::Double slope2 =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index)
+                  {
+                    const int unknown_begin =
+                        grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                    return workspace_slope_[static_cast<std::size_t>(unknown_begin + 2)];
+                  });
+          const tree_solver_simd::Double intercept0 =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index)
+                  {
+                    const int unknown_begin =
+                        grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                    return workspace_intercept_[static_cast<std::size_t>(unknown_begin)];
+                  });
+          const tree_solver_simd::Double intercept1 =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index)
+                  {
+                    const int unknown_begin =
+                        grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                    return workspace_intercept_[static_cast<std::size_t>(unknown_begin + 1)];
+                  });
+          const tree_solver_simd::Double intercept2 =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index)
+                  {
+                    const int unknown_begin =
+                        grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                    return workspace_intercept_[static_cast<std::size_t>(unknown_begin + 2)];
+                  });
+
+          const tree_solver_simd::Double value0 = slope0 * inlet_pressure + intercept0;
+          const tree_solver_simd::Double value1 = slope1 * inlet_pressure + intercept1;
+          const tree_solver_simd::Double value2 = slope2 * inlet_pressure + intercept2;
+          tree_solver_simd::scatter_valid(value0, chunk_begin, valid_end,
+              [&](int grouped_index, double value)
+              {
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                set_delta_local_value(
+                    unknown_correction_local_dof_ids_[static_cast<std::size_t>(unknown_begin)],
+                    value);
+              });
+          tree_solver_simd::scatter_valid(value1, chunk_begin, valid_end,
+              [&](int grouped_index, double value)
+              {
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                set_delta_local_value(
+                    unknown_correction_local_dof_ids_[static_cast<std::size_t>(unknown_begin + 1)],
+                    value);
+              });
+          tree_solver_simd::scatter_valid(value2, chunk_begin, valid_end,
+              [&](int grouped_index, double value)
+              {
+                const int unknown_begin =
+                    grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                set_delta_local_value(
+                    unknown_correction_local_dof_ids_[static_cast<std::size_t>(unknown_begin + 2)],
+                    value);
+              });
+
+          if (group.child_count == 0)
+          {
+            return;
+          }
+
+          const tree_solver_simd::Double outlet_slope =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index)
+                  {
+                    const int element_index =
+                        grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                    const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+                    const int unknown_begin =
+                        grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                    const int outlet_pressure_index =
+                        outlet_pressure_unknown_index_[element_index_size];
+                    return workspace_slope_[static_cast<std::size_t>(
+                        unknown_begin + outlet_pressure_index)];
+                  });
+          const tree_solver_simd::Double outlet_intercept =
+              tree_solver_simd::gather_or(chunk_begin, valid_end, 0.0,
+                  [&](int grouped_index)
+                  {
+                    const int element_index =
+                        grouped_element_indices_[static_cast<std::size_t>(grouped_index)];
+                    const std::size_t element_index_size = static_cast<std::size_t>(element_index);
+                    const int unknown_begin =
+                        grouped_unknown_begin_[static_cast<std::size_t>(grouped_index)];
+                    const int outlet_pressure_index =
+                        outlet_pressure_unknown_index_[element_index_size];
+                    return workspace_intercept_[static_cast<std::size_t>(
+                        unknown_begin + outlet_pressure_index)];
+                  });
+          const tree_solver_simd::Double outlet_pressure =
+              outlet_slope * inlet_pressure + outlet_intercept;
+
+          for (int child_slot = 0; child_slot < group.child_count; ++child_slot)
+          {
+            const tree_solver_simd::Double child_pressure_slope = tree_solver_simd::gather_or(
+                chunk_begin, valid_end, 0.0,
+                [&](int grouped_index)
+                {
+                  const int child_interface_index =
+                      grouped_child_begin_[static_cast<std::size_t>(grouped_index)] + child_slot;
+                  return child_pressure_slope_[static_cast<std::size_t>(child_interface_index)];
+                });
+            const tree_solver_simd::Double child_pressure_intercept = tree_solver_simd::gather_or(
+                chunk_begin, valid_end, 0.0,
+                [&](int grouped_index)
+                {
+                  const int child_interface_index =
+                      grouped_child_begin_[static_cast<std::size_t>(grouped_index)] + child_slot;
+                  return child_pressure_intercept_[static_cast<std::size_t>(child_interface_index)];
+                });
+            const tree_solver_simd::Double child_pressure =
+                child_pressure_slope * outlet_pressure + child_pressure_intercept;
+            tree_solver_simd::scatter_valid(child_pressure, chunk_begin, valid_end,
+                [&](int grouped_index, double value)
+                {
+                  const int child_interface_index =
+                      grouped_child_begin_[static_cast<std::size_t>(grouped_index)] + child_slot;
+                  set_inlet_pressure(
+                      child_element_index_[static_cast<std::size_t>(child_interface_index)], value);
+                });
+          }
+        };
+
+        int grouped_index = group.begin;
+        const int padded_end = tree_solver_simd::padded_chunk_end(group.begin, group.end);
+        for (; grouped_index < padded_end; grouped_index += tree_solver_simd::width())
+        {
+          recover_3x3_top_down_chunk(grouped_index, group.end);
+        }
+#else
+        for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+        {
+          recover_3x3_top_down_lane(grouped_index);
+        }
+#endif
+      };
+
       const auto recover_top_down_group = [&](const ElementGroup& group)
       {
         const int group_size = group.end - group.begin;
@@ -3134,6 +3379,10 @@ namespace ReducedLung
               if (group.block_size == 2 && group.child_count <= 2)
               {
                 recover_2x2_top_down_group(group);
+              }
+              else if (group.block_size == 3 && group.child_count <= 2)
+              {
+                recover_3x3_top_down_group(group);
               }
               else
               {
