@@ -62,6 +62,12 @@ namespace ReducedLung
     unsigned int solve_count = 0;
     std::uint64_t dense_solve_count = 0;
     std::uint64_t coefficient_lookup_count = 0;
+    std::uint64_t simd_group_count = 0;
+    std::uint64_t simd_lane_count = 0;
+    std::uint64_t scalar_group_count = 0;
+    std::uint64_t scalar_tail_lane_count = 0;
+    std::uint64_t dense_fallback_count = 0;
+    std::uint64_t unsupported_block_fallback_count = 0;
     std::uint64_t communicated_coefficient_count = 0;
     std::uint64_t communicated_residual_count = 0;
     std::uint64_t boundary_relation_message_count = 0;

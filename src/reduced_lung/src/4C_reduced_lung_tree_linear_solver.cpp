@@ -416,7 +416,8 @@ namespace ReducedLung
         const std::vector<int>& grouped_unknown_begin, const std::vector<int>& grouped_matrix_begin,
         std::vector<double>& matrix, std::vector<double>& rhs_constant,
         std::vector<double>& rhs_inlet_pressure, std::vector<double>& intercept,
-        std::vector<double>& slope, std::vector<int>& fallback_lanes, double pivot_tolerance,
+        std::vector<double>& slope, std::vector<int>& fallback_lanes,
+        TreeNewtonLinearSolverProfile* profile, double pivot_tolerance,
         const std::vector<std::string>& element_context)
     {
       const int group_size = group_end - group_begin;
@@ -466,6 +467,11 @@ namespace ReducedLung
       int lane = 0;
 #if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
       const int simd_end = tree_solver_simd::full_chunk_end(0, group_size);
+      if (profile != nullptr && simd_end > 0)
+      {
+        ++profile->simd_group_count;
+        profile->simd_lane_count += static_cast<std::uint64_t>(simd_end);
+      }
       const auto load_matrix_entry = [&](int grouped_index, int entry_offset)
       {
         const int matrix_begin = grouped_matrix_begin[static_cast<std::size_t>(grouped_index)];
@@ -548,11 +554,19 @@ namespace ReducedLung
       }
 #endif
 
+      if (profile != nullptr && lane < group_size)
+      {
+        profile->scalar_tail_lane_count += static_cast<std::uint64_t>(group_size - lane);
+      }
       for (; lane < group_size; ++lane)
       {
         solve_direct_lane(lane);
       }
 
+      if (profile != nullptr)
+      {
+        profile->dense_fallback_count += static_cast<std::uint64_t>(fallback_count);
+      }
       for (int fallback_index = 0; fallback_index < fallback_count; ++fallback_index)
       {
         const int lane = fallback_lanes[static_cast<std::size_t>(fallback_index)];
@@ -581,8 +595,8 @@ namespace ReducedLung
         std::vector<double>& rhs_inlet_pressure2, std::vector<double>& intercept0,
         std::vector<double>& intercept1, std::vector<double>& intercept2,
         std::vector<double>& slope0, std::vector<double>& slope1, std::vector<double>& slope2,
-        std::vector<int>& fallback_lanes, double pivot_tolerance,
-        const std::vector<std::string>& element_context)
+        std::vector<int>& fallback_lanes, TreeNewtonLinearSolverProfile* profile,
+        double pivot_tolerance, const std::vector<std::string>& element_context)
     {
       const int group_size = group_end - group_begin;
       FOUR_C_ASSERT_ALWAYS(group_size >= 0, "TreeNewtonLinearSolver 3x3 batch has invalid range.");
@@ -763,6 +777,11 @@ namespace ReducedLung
       };
 
       const int simd_end = tree_solver_simd::full_chunk_end(0, group_size);
+      if (profile != nullptr && simd_end > 0)
+      {
+        ++profile->simd_group_count;
+        profile->simd_lane_count += static_cast<std::uint64_t>(simd_end);
+      }
       for (; lane < simd_end; lane += tree_solver_simd::width())
       {
         const tree_solver_simd::Double p0 = tree_solver_simd::gather(
@@ -862,11 +881,19 @@ namespace ReducedLung
       }
 #endif
 
+      if (profile != nullptr && lane < group_size)
+      {
+        profile->scalar_tail_lane_count += static_cast<std::uint64_t>(group_size - lane);
+      }
       for (; lane < group_size; ++lane)
       {
         solve_3x3_direct_lane(lane);
       }
 
+      if (profile != nullptr)
+      {
+        profile->dense_fallback_count += static_cast<std::uint64_t>(fallback_count);
+      }
       for (int fallback_index = 0; fallback_index < fallback_count; ++fallback_index)
       {
         const int lane = fallback_lanes[static_cast<std::size_t>(fallback_index)];
@@ -2064,6 +2091,10 @@ namespace ReducedLung
       const auto bottom_up_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
       if (use_scalar_tree_solve_)
       {
+        if (profile_ != nullptr)
+        {
+          ++profile_->scalar_group_count;
+        }
         for (const auto& layer : tree_metadata_.bottom_up_layers)
         {
           for (const int element_index : layer)
@@ -2094,6 +2125,10 @@ namespace ReducedLung
             }
             else
             {
+              if (profile_ != nullptr)
+              {
+                ++profile_->scalar_group_count;
+              }
               assemble_group(group);
             }
 
@@ -2104,7 +2139,8 @@ namespace ReducedLung
               solve_2x2_batch(group.begin, group.end, grouped_element_indices_,
                   grouped_unknown_begin_, grouped_matrix_begin_, workspace_matrix_,
                   workspace_rhs_constant_, workspace_rhs_inlet_pressure_, workspace_intercept_,
-                  workspace_slope_, batch_2x2_fallback_lanes_, pivot_tolerance_, element_context_);
+                  workspace_slope_, batch_2x2_fallback_lanes_, profile_, pivot_tolerance_,
+                  element_context_);
               if (profile_ != nullptr)
               {
                 profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
@@ -2124,7 +2160,7 @@ namespace ReducedLung
                   batch_3x3_rhs_inlet_pressure0_, batch_3x3_rhs_inlet_pressure1_,
                   batch_3x3_rhs_inlet_pressure2_, batch_3x3_intercept0_, batch_3x3_intercept1_,
                   batch_3x3_intercept2_, batch_3x3_slope0_, batch_3x3_slope1_, batch_3x3_slope2_,
-                  batch_3x3_fallback_lanes_, pivot_tolerance_, element_context_);
+                  batch_3x3_fallback_lanes_, profile_, pivot_tolerance_, element_context_);
               if (profile_ != nullptr)
               {
                 profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
@@ -2133,6 +2169,12 @@ namespace ReducedLung
             }
             else
             {
+              if (profile_ != nullptr)
+              {
+                ++profile_->scalar_group_count;
+                profile_->unsupported_block_fallback_count +=
+                    static_cast<std::uint64_t>(group.end - group.begin);
+              }
               for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
               {
                 solve_scalar_element(
@@ -2553,6 +2595,10 @@ namespace ReducedLung
       constexpr int top_down_scalar_group_threshold = 2;
       if (use_scalar_tree_solve_)
       {
+        if (profile_ != nullptr)
+        {
+          ++profile_->scalar_group_count;
+        }
         for (const auto& layer : tree_metadata_.top_down_layers)
         {
           for (const int element_index : layer)
@@ -2573,6 +2619,10 @@ namespace ReducedLung
                 group.end);
             if (group_size <= top_down_scalar_group_threshold)
             {
+              if (profile_ != nullptr)
+              {
+                ++profile_->scalar_group_count;
+              }
               for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
               {
                 recover_top_down_element(
@@ -2587,6 +2637,10 @@ namespace ReducedLung
               }
               else
               {
+                if (profile_ != nullptr)
+                {
+                  ++profile_->scalar_group_count;
+                }
                 recover_top_down_group(group);
               }
             }

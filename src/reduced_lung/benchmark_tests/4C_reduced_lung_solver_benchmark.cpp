@@ -620,6 +620,16 @@ namespace
         static_cast<double>(profile.coefficient_lookup_count) / iterations;
     state.counters["tree_dense_solves"] =
         static_cast<double>(profile.dense_solve_count) / iterations;
+    state.counters["tree_simd_groups"] = static_cast<double>(profile.simd_group_count) / iterations;
+    state.counters["tree_simd_lanes"] = static_cast<double>(profile.simd_lane_count) / iterations;
+    state.counters["tree_scalar_groups"] =
+        static_cast<double>(profile.scalar_group_count) / iterations;
+    state.counters["tree_scalar_tail_lanes"] =
+        static_cast<double>(profile.scalar_tail_lane_count) / iterations;
+    state.counters["tree_dense_fallbacks"] =
+        static_cast<double>(profile.dense_fallback_count) / iterations;
+    state.counters["tree_unsupported_fallbacks"] =
+        static_cast<double>(profile.unsupported_block_fallback_count) / iterations;
     state.counters["tree_workspace_dofs"] = static_cast<double>(profile.total_local_block_dofs);
     state.counters["tree_max_block"] = static_cast<double>(profile.max_local_block_size);
   }
