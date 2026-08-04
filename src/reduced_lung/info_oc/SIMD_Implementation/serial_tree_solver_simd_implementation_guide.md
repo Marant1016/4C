@@ -403,7 +403,7 @@ Acceptance criteria:
 - Unsafe lanes still use the pivoted scalar fallback.
 - Existing correctness tests pass.
 
-## Step 7: Optional Group Packing
+## Step 7: Optional Group Packing (IGNORED)
 
 If gather-heavy SIMD does not improve performance enough, add per-group packed SoA work buffers.
 
@@ -429,7 +429,7 @@ Tradeoff:
 
 Only add this if benchmark data shows gather/indirection dominates.
 
-## Step 8: Optional SIMD Counters
+## Step 8: Optional SIMD Counters (IGNORED)
 
 Add profiling counters only after the first SIMD path works.
 
@@ -447,7 +447,7 @@ These are useful for confirming that large cases actually enter the SIMD path.
 
 Do not add counters before the implementation is stable; profiling code can add noise to microbenchmarks.
 
-## Step 9: Sparse Path Decision
+## Step 9: Sparse Path Decision (IGNORED)
 
 The sparse-Jacobian path should stay scalar unless there is a concrete benchmark reason to optimize it.
 
