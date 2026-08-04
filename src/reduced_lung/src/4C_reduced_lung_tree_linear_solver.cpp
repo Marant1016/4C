@@ -935,7 +935,8 @@ namespace ReducedLung
       : tree_metadata_(context.tree_metadata),
         pivot_tolerance_(context.pivot_tolerance),
         coefficient_source_(context.coefficient_source),
-        profile_(context.profile)
+        profile_(context.profile),
+        force_batch_tree_solve_(context.force_batch_tree_solve)
   {
     FOUR_C_ASSERT_ALWAYS(pivot_tolerance_ > 0.0,
         "TreeNewtonLinearSolver requires a positive pivot tolerance, got {}.", pivot_tolerance_);
@@ -952,7 +953,8 @@ namespace ReducedLung
 
     const int element_count = static_cast<int>(tree_metadata_.elements.size());
     constexpr int scalar_tree_element_threshold = 7;
-    use_scalar_tree_solve_ = element_count <= scalar_tree_element_threshold;
+    use_scalar_tree_solve_ =
+        !force_batch_tree_solve_ && element_count <= scalar_tree_element_threshold;
     global_element_id_.assign(static_cast<std::size_t>(element_count), -1);
     inlet_pressure_local_dof_.assign(static_cast<std::size_t>(element_count), -1);
     inlet_flow_unknown_index_.assign(static_cast<std::size_t>(element_count), -1);
@@ -3515,7 +3517,9 @@ namespace ReducedLung
             FOUR_C_ASSERT_ALWAYS(group_size >= 0,
                 "TreeNewtonLinearSolver top-down group has invalid range [{}, {}).", group.begin,
                 group.end);
-            if (group_size <= top_down_scalar_group_threshold)
+            const bool use_scalar_top_down_group =
+                !force_batch_tree_solve_ && group_size <= top_down_scalar_group_threshold;
+            if (use_scalar_top_down_group)
             {
               if (profile_ != nullptr)
               {
