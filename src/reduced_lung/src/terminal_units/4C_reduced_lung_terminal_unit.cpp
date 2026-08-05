@@ -47,21 +47,21 @@ namespace ReducedLung
     }
 
     void update_static_tree_linearization(
-        TreeLinearization& linearization, TerminalUnitContainer& terminal_units)
+        TreeCoefficientAssemblyTarget& target, TerminalUnitContainer& terminal_units)
     {
       for (auto& model : terminal_units.models)
       {
-        model.static_tree_linearization_evaluator(model.data, linearization);
+        model.static_tree_linearization_evaluator(model.data, target);
       }
     }
 
-    void update_tree_linearization(TreeLinearization& linearization,
+    void update_tree_linearization(TreeCoefficientAssemblyTarget& target,
         TerminalUnitContainer& terminal_units,
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
     {
       for (auto& model : terminal_units.models)
       {
-        model.tree_linearization_evaluator(model.data, linearization, locally_relevant_dofs, dt);
+        model.tree_linearization_evaluator(model.data, target, locally_relevant_dofs, dt);
       }
     }
 

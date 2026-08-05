@@ -34,10 +34,12 @@ namespace ReducedLung::Airways::FlowResistance
             "Poiseuille resistance output has {} entries but expected {}.", result.size(),
             data.number_of_elements());
 
+        const double resistance_factor =
+            8.0 * std::numbers::pi * data.air_properties.dynamic_viscosity;
         for (size_t i = 0; i < data.number_of_elements(); ++i)
         {
-          result[i] = 8 * std::numbers::pi * data.air_properties.dynamic_viscosity *
-                      data.ref_length[i] / (area[i] * area[i]);
+          const double area_i = area[i];
+          result[i] = resistance_factor * data.ref_length[i] / (area_i * area_i);
         }
       }
     };

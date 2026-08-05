@@ -232,6 +232,42 @@ namespace ReducedLung
   void NewtonSolver::assemble_tree_linearization_for_current_state()
   {
     const auto assembly_start = Clock::now();
+    if (TreeCoefficientAssemblyTarget* direct_target =
+            linear_solver_->direct_tree_coefficient_target())
+    {
+      const auto static_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
+      if (!tree_linearization_static_initialized_)
+      {
+        for (const auto& tree_linearization_static_assembler :
+            assembly_pipeline_.tree_linearization_static_assemblers)
+        {
+          tree_linearization_static_assembler.callback(*direct_target);
+        }
+        tree_linearization_static_initialized_ = true;
+      }
+      if (profile_ != nullptr)
+      {
+        profile_->tree_linearization_clear_time += elapsed_seconds(static_start);
+      }
+      for (const auto& tree_linearization_assembler :
+          assembly_pipeline_.tree_linearization_assemblers)
+      {
+        const auto phase_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
+        tree_linearization_assembler.callback(
+            *direct_target, locally_relevant_dofs_, current_time_, dt_);
+        if (profile_ != nullptr)
+        {
+          add_tree_linearization_phase_time(
+              *profile_, tree_linearization_assembler.phase, elapsed_seconds(phase_start));
+        }
+      }
+      if (profile_ != nullptr)
+      {
+        profile_->structured_tree_linearization_assembly_time += elapsed_seconds(assembly_start);
+      }
+      return;
+    }
+
     const int num_rows = residual_.local_length();
     const int num_dofs = locally_relevant_dofs_.local_length();
     const auto clear_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};

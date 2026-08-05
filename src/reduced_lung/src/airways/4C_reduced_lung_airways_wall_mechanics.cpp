@@ -143,17 +143,24 @@ namespace ReducedLung::Airways::WallMechanics
     }
   }
 
-  void evaluate_tree_linearization_rigid_wall(TreeLinearization& target, AirwayData const& data,
-      std::span<const double> resistance_derivative, std::span<const double> inertia_derivative)
+  void evaluate_tree_linearization_rigid_wall(TreeCoefficientAssemblyTarget& target,
+      AirwayData const& data, std::span<double> resistance_derivative,
+      std::span<const double> inertia_derivative)
   {
+    FOUR_C_ASSERT_ALWAYS(resistance_derivative.size() == data.number_of_elements(),
+        "Rigid airway tree coefficient buffer has {} entries but expected {}.",
+        resistance_derivative.size(), data.number_of_elements());
+    FOUR_C_ASSERT_ALWAYS(inertia_derivative.size() == data.number_of_elements(),
+        "Rigid airway inertia derivative buffer has {} entries but expected {}.",
+        inertia_derivative.size(), data.number_of_elements());
     for (size_t i = 0; i < data.number_of_elements(); i++)
     {
-      target.replace_value(
-          data.local_row_id[i], data.lid_q1[i], -resistance_derivative[i] - inertia_derivative[i]);
+      resistance_derivative[i] = -resistance_derivative[i] - inertia_derivative[i];
     }
+    target.replace_values(data.local_row_id, data.lid_q1, resistance_derivative);
   }
 
-  void evaluate_tree_linearization_kelvin_voigt_wall(TreeLinearization& target,
+  void evaluate_tree_linearization_kelvin_voigt_wall(TreeCoefficientAssemblyTarget& target,
       AirwayData const& data, std::span<const double> resistance_derivative_q1,
       std::span<const double> resistance_derivative_q2,
       std::span<const double> inertia_derivative_q1, std::span<const double> inertia_derivative_q2,
@@ -175,7 +182,8 @@ namespace ReducedLung::Airways::WallMechanics
     }
   }
 
-  void initialize_rigid_wall_tree_linearization(TreeLinearization& target, const AirwayData& data)
+  void initialize_rigid_wall_tree_linearization(
+      TreeCoefficientAssemblyTarget& target, const AirwayData& data)
   {
     for (size_t i = 0; i < data.number_of_elements(); ++i)
     {
@@ -186,7 +194,7 @@ namespace ReducedLung::Airways::WallMechanics
   }
 
   void initialize_kelvin_voigt_wall_tree_linearization(
-      TreeLinearization& target, const AirwayData& data)
+      TreeCoefficientAssemblyTarget& target, const AirwayData& data)
   {
     for (size_t i = 0; i < data.number_of_elements(); ++i)
     {
@@ -369,12 +377,12 @@ namespace ReducedLung::Airways::WallMechanics
           using WallModelType = std::decay_t<decltype(wall_model_data)>;
           if constexpr (std::is_same_v<WallModelType, RigidWall>)
           {
-            return [](const AirwayData& airway_data, TreeLinearization& target)
+            return [](const AirwayData& airway_data, TreeCoefficientAssemblyTarget& target)
             { initialize_rigid_wall_tree_linearization(target, airway_data); };
           }
           else if constexpr (std::is_same_v<WallModelType, KelvinVoigtWall>)
           {
-            return [](const AirwayData& airway_data, TreeLinearization& target)
+            return [](const AirwayData& airway_data, TreeCoefficientAssemblyTarget& target)
             { initialize_kelvin_voigt_wall_tree_linearization(target, airway_data); };
           }
           else
@@ -400,7 +408,7 @@ namespace ReducedLung::Airways::WallMechanics
             return [resistance_derivative_evaluator, inertia_evaluator,
                        resistance_derivative = std::vector<double>{},
                        inertia_derivative = std::vector<double>{}](const AirwayData& airway_data,
-                       TreeLinearization& target,
+                       TreeCoefficientAssemblyTarget& target,
                        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt) mutable
             {
               const size_t element_count = airway_data.number_of_elements();
@@ -413,7 +421,8 @@ namespace ReducedLung::Airways::WallMechanics
                 value /= dt;
               }
               evaluate_tree_linearization_rigid_wall(target, airway_data,
-                  as_const_span(resistance_derivative), as_const_span(inertia_derivative));
+                  std::span<double>(resistance_derivative.data(), resistance_derivative.size()),
+                  as_const_span(inertia_derivative));
             };
           }
           else if constexpr (std::is_same_v<WallModelType, KelvinVoigtWall>)
@@ -432,7 +441,7 @@ namespace ReducedLung::Airways::WallMechanics
                        inertia_derivative_q2 = std::vector<double>{},
                        viscous_wall_resistance_derivative_q1 = std::vector<double>{},
                        viscous_wall_resistance_derivative_q2 = std::vector<double>{}](
-                       const AirwayData& airway_data, TreeLinearization& target,
+                       const AirwayData& airway_data, TreeCoefficientAssemblyTarget& target,
                        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt) mutable
             {
               const size_t element_count = airway_data.number_of_elements();

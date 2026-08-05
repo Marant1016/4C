@@ -48,6 +48,7 @@ namespace Core::Utils
 
 namespace ReducedLung
 {
+  class TreeCoefficientAssemblyTarget;
   class TreeLinearization;
 
   namespace BoundaryConditions
@@ -260,8 +261,8 @@ namespace ReducedLung
     /**
      * @brief Assemble boundary-condition structured tree-linearization contributions.
      */
-    void update_tree_linearization(
-        TreeLinearization& linearization, const BoundaryConditionContainer& boundary_conditions);
+    void update_tree_linearization(TreeCoefficientAssemblyTarget& target,
+        const BoundaryConditionContainer& boundary_conditions);
   }  // namespace BoundaryConditions
 }  // namespace ReducedLung
 

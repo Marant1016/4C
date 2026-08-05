@@ -65,12 +65,12 @@ namespace ReducedLung::TerminalUnits
    * @brief Assemble static terminal-unit structured tree-linearization row patterns.
    */
   void update_static_tree_linearization(
-      TreeLinearization& linearization, TerminalUnitContainer& terminal_units);
+      TreeCoefficientAssemblyTarget& target, TerminalUnitContainer& terminal_units);
 
   /**
    * @brief Update dynamic terminal-unit structured tree-linearization coefficients.
    */
-  void update_tree_linearization(TreeLinearization& linearization,
+  void update_tree_linearization(TreeCoefficientAssemblyTarget& target,
       TerminalUnitContainer& terminal_units,
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt);
 

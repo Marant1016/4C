@@ -17,6 +17,19 @@ FOUR_C_NAMESPACE_OPEN
 
 namespace ReducedLung
 {
+  void TreeCoefficientAssemblyTarget::replace_values(std::span<const int> local_row_ids,
+      std::span<const int> local_dof_ids, std::span<const double> values)
+  {
+    FOUR_C_ASSERT_ALWAYS(
+        local_row_ids.size() == local_dof_ids.size() && local_row_ids.size() == values.size(),
+        "Tree coefficient batch replacement size mismatch: rows {}, dofs {}, values {}.",
+        local_row_ids.size(), local_dof_ids.size(), values.size());
+    for (std::size_t i = 0; i < values.size(); ++i)
+    {
+      replace_value(local_row_ids[i], local_dof_ids[i], values[i]);
+    }
+  }
+
   void TreeLinearization::reset(int num_rows, int num_dofs)
   {
     FOUR_C_ASSERT_ALWAYS(num_rows >= 0, "Tree linearization row count must be non-negative.");
@@ -88,6 +101,19 @@ namespace ReducedLung
         "Tree linearization row {} does not contain dof {} for replacement.", local_row_id,
         local_dof_id);
     entry->second = value;
+  }
+
+  void TreeLinearization::replace_values(std::span<const int> local_row_ids,
+      std::span<const int> local_dof_ids, std::span<const double> values)
+  {
+    FOUR_C_ASSERT_ALWAYS(
+        local_row_ids.size() == local_dof_ids.size() && local_row_ids.size() == values.size(),
+        "Tree linearization batch replacement size mismatch: rows {}, dofs {}, values {}.",
+        local_row_ids.size(), local_dof_ids.size(), values.size());
+    for (std::size_t i = 0; i < values.size(); ++i)
+    {
+      TreeLinearization::replace_value(local_row_ids[i], local_dof_ids[i], values[i]);
+    }
   }
 
   double TreeLinearization::value(int local_row_id, int local_dof_id) const

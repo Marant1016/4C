@@ -194,45 +194,43 @@ namespace ReducedLung
     pipeline.tree_linearization_static_assemblers.push_back(
         ReducedLungAssemblyPipeline::NamedStaticTreeLinearizationAssembler{
             .phase = TreeAssemblyPhase::Airways,
-            .callback = [&airways](TreeLinearization& linearization)
-            { Airways::update_static_tree_linearization(linearization, airways); }});
+            .callback = [&airways](TreeCoefficientAssemblyTarget& target)
+            { Airways::update_static_tree_linearization(target, airways); }});
     pipeline.tree_linearization_static_assemblers.push_back(
         ReducedLungAssemblyPipeline::NamedStaticTreeLinearizationAssembler{
             .phase = TreeAssemblyPhase::TerminalUnits,
-            .callback = [&terminal_units](TreeLinearization& linearization)
-            { TerminalUnits::update_static_tree_linearization(linearization, terminal_units); }});
+            .callback = [&terminal_units](TreeCoefficientAssemblyTarget& target)
+            { TerminalUnits::update_static_tree_linearization(target, terminal_units); }});
     pipeline.tree_linearization_static_assemblers.push_back(
         ReducedLungAssemblyPipeline::NamedStaticTreeLinearizationAssembler{
             .phase = TreeAssemblyPhase::Junctions,
-            .callback = [&connections, &bifurcations](TreeLinearization& linearization)
-            { Junctions::update_tree_linearization(linearization, connections, bifurcations); }});
+            .callback = [&connections, &bifurcations](TreeCoefficientAssemblyTarget& target)
+            { Junctions::update_tree_linearization(target, connections, bifurcations); }});
     pipeline.tree_linearization_static_assemblers.push_back(
         ReducedLungAssemblyPipeline::NamedStaticTreeLinearizationAssembler{
             .phase = TreeAssemblyPhase::BoundaryConditions,
-            .callback = [&boundary_conditions](TreeLinearization& linearization)
-            {
-              BoundaryConditions::update_tree_linearization(linearization, boundary_conditions);
-            }});
+            .callback = [&boundary_conditions](TreeCoefficientAssemblyTarget& target)
+            { BoundaryConditions::update_tree_linearization(target, boundary_conditions); }});
 
     pipeline.tree_linearization_assemblers.push_back(
         ReducedLungAssemblyPipeline::NamedTreeLinearizationAssembler{
             .phase = TreeAssemblyPhase::Airways,
-            .callback = [&airways](TreeLinearization& linearization,
+            .callback = [&airways](TreeCoefficientAssemblyTarget& target,
                             const Core::LinAlg::Vector<double>& locally_relevant_dofs,
                             double /*current_time*/, double time_step_size_dt)
             {
               Airways::update_tree_linearization(
-                  linearization, airways, locally_relevant_dofs, time_step_size_dt);
+                  target, airways, locally_relevant_dofs, time_step_size_dt);
             }});
     pipeline.tree_linearization_assemblers.push_back(
         ReducedLungAssemblyPipeline::NamedTreeLinearizationAssembler{
             .phase = TreeAssemblyPhase::TerminalUnits,
-            .callback = [&terminal_units](TreeLinearization& linearization,
+            .callback = [&terminal_units](TreeCoefficientAssemblyTarget& target,
                             const Core::LinAlg::Vector<double>& locally_relevant_dofs,
                             double /*current_time*/, double time_step_size_dt)
             {
               TerminalUnits::update_tree_linearization(
-                  linearization, terminal_units, locally_relevant_dofs, time_step_size_dt);
+                  target, terminal_units, locally_relevant_dofs, time_step_size_dt);
             }});
 
     pipeline.state_updaters.emplace_back(

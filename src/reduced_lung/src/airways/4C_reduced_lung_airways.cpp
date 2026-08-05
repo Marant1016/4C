@@ -24,20 +24,21 @@ namespace ReducedLung::Airways
     }
   }
 
-  void update_static_tree_linearization(TreeLinearization& linearization, AirwayContainer& airways)
+  void update_static_tree_linearization(
+      TreeCoefficientAssemblyTarget& target, AirwayContainer& airways)
   {
     for (auto& model : airways.models)
     {
-      model.static_tree_linearization_evaluator(model.data, linearization);
+      model.static_tree_linearization_evaluator(model.data, target);
     }
   }
 
-  void update_tree_linearization(TreeLinearization& linearization, AirwayContainer& airways,
+  void update_tree_linearization(TreeCoefficientAssemblyTarget& target, AirwayContainer& airways,
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
   {
     for (auto& model : airways.models)
     {
-      model.tree_linearization_evaluator(model.data, linearization, locally_relevant_dofs, dt);
+      model.tree_linearization_evaluator(model.data, target, locally_relevant_dofs, dt);
     }
   }
 

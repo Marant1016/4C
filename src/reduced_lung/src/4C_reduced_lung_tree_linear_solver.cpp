@@ -21,6 +21,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <vector>
@@ -285,6 +286,34 @@ namespace ReducedLung
 
       const TreeLinearization& linearization_;
       TreeNewtonLinearSolverProfile* profile_ = nullptr;
+    };
+
+    class DirectTreeCoefficientProvider
+    {
+     public:
+      [[nodiscard]] double value(int local_row, int local_col, double tolerance) const
+      {
+        (void)tolerance;
+        FOUR_C_THROW(
+            "TreeNewtonLinearSolver direct coefficient provider cannot look up row {} dof {}.",
+            local_row, local_col);
+      }
+
+      [[nodiscard]] double value(const TreeCoefficientLocation& location, double tolerance) const
+      {
+        (void)tolerance;
+        FOUR_C_THROW(
+            "TreeNewtonLinearSolver direct coefficient provider cannot look up row {} dof {}.",
+            location.local_row, location.local_dof);
+      }
+
+      [[nodiscard]] double value(
+          const TreeCoefficientLocation& location, double direct_value, double tolerance) const
+      {
+        (void)location;
+        (void)tolerance;
+        return direct_value;
+      }
     };
 
     const TreeJunctionMetadata* find_junction_for_parent(
@@ -1161,6 +1190,98 @@ namespace ReducedLung
       }
     }
 
+    struct PendingDirectCoefficientEntry
+    {
+      int local_row = -1;
+      int local_dof = -1;
+      double* value = nullptr;
+      const char* context = nullptr;
+    };
+
+    std::vector<PendingDirectCoefficientEntry> pending_direct_coefficients;
+    pending_direct_coefficients.reserve(
+        1 + equation_inlet_pressure_coefficients_.size() + matrix_coefficients_.size() +
+        child_pressure_parent_coefficients_.size() + child_pressure_child_coefficients_.size() +
+        child_flow_coefficients_.size());
+    int max_direct_coefficient_row = -1;
+    const auto register_direct_coefficient =
+        [&](const TreeCoefficientLocation& location, double& value, const char* context)
+    {
+      FOUR_C_ASSERT_ALWAYS(location.local_row >= 0 && location.local_dof >= 0,
+          "TreeNewtonLinearSolver direct coefficient {} has invalid row {} dof {}.", context,
+          location.local_row, location.local_dof);
+      pending_direct_coefficients.push_back(PendingDirectCoefficientEntry{
+          .local_row = location.local_row,
+          .local_dof = location.local_dof,
+          .value = &value,
+          .context = context,
+      });
+      max_direct_coefficient_row = std::max(max_direct_coefficient_row, location.local_row);
+    };
+    register_direct_coefficient(
+        root_boundary_coefficient_, root_boundary_coefficient_value_, "root inlet boundary");
+    for (std::size_t i = 0; i < equation_inlet_pressure_coefficients_.size(); ++i)
+    {
+      register_direct_coefficient(equation_inlet_pressure_coefficients_[i],
+          equation_inlet_pressure_coefficient_values_[i], "equation inlet-pressure coefficient");
+    }
+    for (std::size_t i = 0; i < matrix_coefficients_.size(); ++i)
+    {
+      register_direct_coefficient(
+          matrix_coefficients_[i], matrix_coefficient_values_[i], "element matrix coefficient");
+    }
+    for (std::size_t i = 0; i < child_pressure_parent_coefficients_.size(); ++i)
+    {
+      register_direct_coefficient(child_pressure_parent_coefficients_[i],
+          child_pressure_parent_coefficient_values_[i], "child pressure parent coefficient");
+    }
+    for (std::size_t i = 0; i < child_pressure_child_coefficients_.size(); ++i)
+    {
+      register_direct_coefficient(child_pressure_child_coefficients_[i],
+          child_pressure_child_coefficient_values_[i], "child pressure child coefficient");
+    }
+    for (std::size_t i = 0; i < child_flow_coefficients_.size(); ++i)
+    {
+      register_direct_coefficient(
+          child_flow_coefficients_[i], child_flow_coefficient_values_[i], "child flow coefficient");
+    }
+
+    direct_coefficient_row_offsets_.assign(
+        static_cast<std::size_t>(std::max(max_direct_coefficient_row + 2, 1)), 0);
+    for (const PendingDirectCoefficientEntry& entry : pending_direct_coefficients)
+    {
+      ++direct_coefficient_row_offsets_[static_cast<std::size_t>(entry.local_row + 1)];
+    }
+    for (std::size_t row = 1; row < direct_coefficient_row_offsets_.size(); ++row)
+    {
+      direct_coefficient_row_offsets_[row] += direct_coefficient_row_offsets_[row - 1];
+    }
+
+    direct_coefficient_entries_.assign(
+        pending_direct_coefficients.size(), DirectCoefficientEntry{});
+    std::vector<int> row_write_positions = direct_coefficient_row_offsets_;
+    for (const PendingDirectCoefficientEntry& entry : pending_direct_coefficients)
+    {
+      const int insert_position = row_write_positions[static_cast<std::size_t>(entry.local_row)]++;
+      for (int existing_position =
+               direct_coefficient_row_offsets_[static_cast<std::size_t>(entry.local_row)];
+          existing_position < insert_position; ++existing_position)
+      {
+        const DirectCoefficientEntry& existing_entry =
+            direct_coefficient_entries_[static_cast<std::size_t>(existing_position)];
+        FOUR_C_ASSERT_ALWAYS(existing_entry.local_dof != entry.local_dof,
+            "TreeNewtonLinearSolver direct coefficient location row {} dof {} is registered more "
+            "than once (existing {}, duplicate {}).",
+            entry.local_row, entry.local_dof, existing_entry.context, entry.context);
+      }
+      direct_coefficient_entries_[static_cast<std::size_t>(insert_position)] =
+          DirectCoefficientEntry{
+              .local_dof = entry.local_dof,
+              .value = entry.value,
+              .context = entry.context,
+          };
+    }
+
     grouped_element_indices_.clear();
     grouped_unknown_begin_.clear();
     grouped_matrix_begin_.clear();
@@ -1461,6 +1582,116 @@ namespace ReducedLung
     }
   }
 
+  TreeCoefficientAssemblyTarget* TreeNewtonLinearSolver::direct_tree_coefficient_target()
+  {
+    if (coefficient_source_ != TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks)
+    {
+      return nullptr;
+    }
+    tree_linearization_ = nullptr;
+    return this;
+  }
+
+  std::vector<TreeStructuredCoefficientValue>
+  TreeNewtonLinearSolver::structured_coefficient_values() const
+  {
+    std::vector<TreeStructuredCoefficientValue> values;
+    values.reserve(1 + equation_inlet_pressure_coefficients_.size() + matrix_coefficients_.size() +
+                   child_pressure_parent_coefficients_.size() +
+                   child_pressure_child_coefficients_.size() + child_flow_coefficients_.size());
+    const auto append_value =
+        [&values](const TreeCoefficientLocation& location, double value, const char* context)
+    {
+      values.push_back(TreeStructuredCoefficientValue{.local_row = location.local_row,
+          .local_dof = location.local_dof,
+          .value = value,
+          .context = context});
+    };
+
+    append_value(
+        root_boundary_coefficient_, root_boundary_coefficient_value_, "root inlet boundary");
+    for (std::size_t i = 0; i < equation_inlet_pressure_coefficients_.size(); ++i)
+    {
+      append_value(equation_inlet_pressure_coefficients_[i],
+          equation_inlet_pressure_coefficient_values_[i], "equation inlet-pressure coefficient");
+    }
+    for (std::size_t i = 0; i < matrix_coefficients_.size(); ++i)
+    {
+      append_value(
+          matrix_coefficients_[i], matrix_coefficient_values_[i], "element matrix coefficient");
+    }
+    for (std::size_t i = 0; i < child_pressure_parent_coefficients_.size(); ++i)
+    {
+      append_value(child_pressure_parent_coefficients_[i],
+          child_pressure_parent_coefficient_values_[i], "child pressure parent coefficient");
+    }
+    for (std::size_t i = 0; i < child_pressure_child_coefficients_.size(); ++i)
+    {
+      append_value(child_pressure_child_coefficients_[i],
+          child_pressure_child_coefficient_values_[i], "child pressure child coefficient");
+    }
+    for (std::size_t i = 0; i < child_flow_coefficients_.size(); ++i)
+    {
+      append_value(
+          child_flow_coefficients_[i], child_flow_coefficient_values_[i], "child flow coefficient");
+    }
+    return values;
+  }
+
+  void TreeNewtonLinearSolver::append_value(int local_row_id, int local_dof_id, double value)
+  {
+    set_direct_coefficient_value(local_row_id, local_dof_id, value, "append");
+  }
+
+  void TreeNewtonLinearSolver::replace_value(int local_row_id, int local_dof_id, double value)
+  {
+    set_direct_coefficient_value(local_row_id, local_dof_id, value, "replace");
+  }
+
+  void TreeNewtonLinearSolver::replace_values(std::span<const int> local_row_ids,
+      std::span<const int> local_dof_ids, std::span<const double> values)
+  {
+    FOUR_C_ASSERT_ALWAYS(
+        local_row_ids.size() == local_dof_ids.size() && local_row_ids.size() == values.size(),
+        "TreeNewtonLinearSolver direct coefficient batch replacement size mismatch: rows {}, dofs "
+        "{}, values {}.",
+        local_row_ids.size(), local_dof_ids.size(), values.size());
+    for (std::size_t i = 0; i < values.size(); ++i)
+    {
+      set_direct_coefficient_value(local_row_ids[i], local_dof_ids[i], values[i], "replace");
+    }
+  }
+
+  void TreeNewtonLinearSolver::set_direct_coefficient_value(
+      int local_row_id, int local_dof_id, double value, const char* operation)
+  {
+    const DirectCoefficientEntry* entry = nullptr;
+    if (local_row_id >= 0 &&
+        static_cast<std::size_t>(local_row_id) + 1 < direct_coefficient_row_offsets_.size())
+    {
+      const int begin = direct_coefficient_row_offsets_[static_cast<std::size_t>(local_row_id)];
+      const int end = direct_coefficient_row_offsets_[static_cast<std::size_t>(local_row_id + 1)];
+      for (int index = begin; index < end; ++index)
+      {
+        const DirectCoefficientEntry& candidate =
+            direct_coefficient_entries_[static_cast<std::size_t>(index)];
+        if (candidate.local_dof == local_dof_id)
+        {
+          entry = &candidate;
+          break;
+        }
+      }
+    }
+    FOUR_C_ASSERT_ALWAYS(entry != nullptr,
+        "TreeNewtonLinearSolver direct coefficient {} for row {} dof {} does not match the "
+        "serial tree symbolic plan.",
+        operation, local_row_id, local_dof_id);
+    FOUR_C_ASSERT_ALWAYS(entry->value != nullptr,
+        "TreeNewtonLinearSolver direct coefficient {} for row {} dof {} has no storage.", operation,
+        local_row_id, local_dof_id);
+    *entry->value = value;
+  }
+
   void TreeNewtonLinearSolver::solve(Core::LinAlg::SparseMatrix& jacobian,
       const Core::LinAlg::Vector<double>& residual, const Core::LinAlg::Vector<double>& x,
       const NewtonLinearSystemMetadata& metadata, Core::LinAlg::Vector<double>& delta)
@@ -1480,13 +1711,14 @@ namespace ReducedLung
     }
     else
     {
-      FOUR_C_ASSERT_ALWAYS(tree_linearization_ != nullptr,
-          "TreeNewtonLinearSolver requires a structured tree linearization before solving.");
-      FOUR_C_ASSERT_ALWAYS(tree_linearization_->num_rows() == tree_metadata_.num_global_equations,
-          "TreeNewtonLinearSolver structured linearization row count does not match metadata.");
-      FOUR_C_ASSERT_ALWAYS(
-          tree_linearization_->num_dofs() == tree_metadata_.num_locally_relevant_dofs,
-          "TreeNewtonLinearSolver structured linearization dof count does not match metadata.");
+      if (tree_linearization_ != nullptr)
+      {
+        FOUR_C_ASSERT_ALWAYS(tree_linearization_->num_rows() == tree_metadata_.num_global_equations,
+            "TreeNewtonLinearSolver structured linearization row count does not match metadata.");
+        FOUR_C_ASSERT_ALWAYS(
+            tree_linearization_->num_dofs() == tree_metadata_.num_locally_relevant_dofs,
+            "TreeNewtonLinearSolver structured linearization dof count does not match metadata.");
+      }
     }
     FOUR_C_ASSERT_ALWAYS(residual.local_length() == tree_metadata_.num_global_equations,
         "TreeNewtonLinearSolver requires all residual rows to be locally available.");
@@ -3574,9 +3806,17 @@ namespace ReducedLung
 
     if (coefficient_source_ == TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks)
     {
-      const StructuredTreeCoefficientProvider structured_coefficients(
-          *tree_linearization_, profile_);
-      solve_with_coefficients(structured_coefficients);
+      if (tree_linearization_ != nullptr)
+      {
+        const StructuredTreeCoefficientProvider structured_coefficients(
+            *tree_linearization_, profile_);
+        solve_with_coefficients(structured_coefficients);
+      }
+      else
+      {
+        const DirectTreeCoefficientProvider direct_coefficients;
+        solve_with_coefficients(direct_coefficients);
+      }
     }
     else
     {

@@ -11,9 +11,12 @@
 #include "4C_config.hpp"
 
 #include "4C_reduced_lung_linear_solver.hpp"
+#include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_reduced_lung_tree_metadata.hpp"
 
 #include <array>
+#include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -28,6 +31,14 @@ namespace ReducedLung
     int local_row = -1;
     int local_dof = -1;
     int structured_entry_index = -1;
+  };
+
+  struct TreeStructuredCoefficientValue
+  {
+    int local_row = -1;
+    int local_dof = -1;
+    double value = 0.0;
+    const char* context = nullptr;
   };
 
   enum class TreeNewtonLinearSolverCoefficientSource
@@ -67,7 +78,7 @@ namespace ReducedLung
    * The first implementation consumes the already assembled sparse Jacobian and residual, then uses
    * tree metadata to condense subtrees bottom-up and recover the correction top-down.
    */
-  class TreeNewtonLinearSolver : public NewtonLinearSolver
+  class TreeNewtonLinearSolver : public NewtonLinearSolver, public TreeCoefficientAssemblyTarget
   {
    public:
     explicit TreeNewtonLinearSolver(const TreeNewtonLinearSolverContext& context);
@@ -75,6 +86,10 @@ namespace ReducedLung
     [[nodiscard]] NewtonLinearizationType linearization_type() const override;
 
     void set_tree_linearization(const TreeLinearization& tree_linearization) override;
+
+    [[nodiscard]] TreeCoefficientAssemblyTarget* direct_tree_coefficient_target() override;
+
+    [[nodiscard]] std::vector<TreeStructuredCoefficientValue> structured_coefficient_values() const;
 
     void solve(Core::LinAlg::SparseMatrix& jacobian, const Core::LinAlg::Vector<double>& residual,
         const Core::LinAlg::Vector<double>& x, const NewtonLinearSystemMetadata& metadata,
@@ -92,6 +107,16 @@ namespace ReducedLung
     void build_symbolic_plan();
 
     void resolve_structured_coefficient_locations(const TreeLinearization& tree_linearization);
+
+    void append_value(int local_row_id, int local_dof_id, double value) override;
+
+    void replace_value(int local_row_id, int local_dof_id, double value) override;
+
+    void replace_values(std::span<const int> local_row_ids, std::span<const int> local_dof_ids,
+        std::span<const double> values) override;
+
+    void set_direct_coefficient_value(
+        int local_row_id, int local_dof_id, double value, const char* operation);
 
     const ReducedLungTreeMetadata& tree_metadata_;
     double pivot_tolerance_;
@@ -143,6 +168,15 @@ namespace ReducedLung
     std::vector<double> child_pressure_parent_coefficient_values_;
     std::vector<double> child_pressure_child_coefficient_values_;
     std::vector<double> child_flow_coefficient_values_;
+
+    struct DirectCoefficientEntry
+    {
+      int local_dof = -1;
+      double* value = nullptr;
+      const char* context = nullptr;
+    };
+    std::vector<int> direct_coefficient_row_offsets_;
+    std::vector<DirectCoefficientEntry> direct_coefficient_entries_;
 
     std::vector<int> grouped_element_indices_;
     std::vector<int> grouped_unknown_begin_;

@@ -30,6 +30,7 @@ namespace Core::LinAlg
 namespace ReducedLung
 {
   struct SparseNewtonLinearSolverProfile;
+  class TreeCoefficientAssemblyTarget;
   class TreeLinearization;
 
   /**
@@ -64,6 +65,11 @@ namespace ReducedLung
     virtual void set_tree_linearization(const TreeLinearization& tree_linearization)
     {
       (void)tree_linearization;
+    }
+
+    [[nodiscard]] virtual TreeCoefficientAssemblyTarget* direct_tree_coefficient_target()
+    {
+      return nullptr;
     }
 
     /**

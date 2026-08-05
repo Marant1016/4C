@@ -663,18 +663,23 @@ namespace
       {
         initialize_capacity(linearization);
       }
+      assemble_tree_coefficients(linearization, current_time);
+      return linearization;
+    }
+
+    void assemble_tree_coefficients(TreeCoefficientAssemblyTarget& target, double current_time)
+    {
       for (const auto& tree_linearization_static_assembler :
           assembly_pipeline.tree_linearization_static_assemblers)
       {
-        tree_linearization_static_assembler.callback(linearization);
+        tree_linearization_static_assembler.callback(target);
       }
       for (const auto& tree_linearization_assembler :
           assembly_pipeline.tree_linearization_assemblers)
       {
         tree_linearization_assembler.callback(
-            linearization, *locally_relevant_dofs, current_time, params.dynamics.time_increment);
+            target, *locally_relevant_dofs, current_time, params.dynamics.time_increment);
       }
-      return linearization;
     }
 
     ReducedLungTreeMetadata build_tree_metadata() const
@@ -772,6 +777,21 @@ namespace
     for (std::size_t i = 0; i < expected_values.size(); ++i)
     {
       EXPECT_NEAR(expected_values[i], actual_values[i], tolerance) << "local vector entry " << i;
+    }
+  }
+
+  void expect_structured_coefficients_near(
+      const std::vector<TreeStructuredCoefficientValue>& expected,
+      const std::vector<TreeStructuredCoefficientValue>& actual, double tolerance)
+  {
+    ASSERT_EQ(expected.size(), actual.size());
+    for (std::size_t i = 0; i < expected.size(); ++i)
+    {
+      SCOPED_TRACE(i);
+      EXPECT_EQ(expected[i].local_row, actual[i].local_row);
+      EXPECT_EQ(expected[i].local_dof, actual[i].local_dof);
+      EXPECT_STREQ(expected[i].context, actual[i].context);
+      EXPECT_NEAR(expected[i].value, actual[i].value, tolerance);
     }
   }
 
@@ -904,6 +924,59 @@ namespace
 
       expect_vectors_near(sparse_delta, tree_delta, 1.0e-9);
     }
+  }
+
+  void compare_direct_and_generic_structured_coefficients(
+      const std::string& name, const ReducedLungParameters& params, bool seed_nonzero_state)
+  {
+    LinearSolverFixture fixture(name, params, {"1.0 * t", "0.0"});
+    const double current_time = params.dynamics.time_increment;
+    if (seed_nonzero_state)
+    {
+      seed_nonzero_initial_state(fixture);
+    }
+    fixture.sync_state_from_x();
+    auto residual = fixture.assemble_residual(current_time);
+    fixture.assemble_jacobian(current_time);
+
+    const auto tree_metadata = fixture.build_tree_metadata();
+    const auto tree_linearization = fixture.assemble_tree_linearization(current_time);
+    TreeNewtonLinearSolver generic_tree_solver(
+        TreeNewtonLinearSolverContext{.tree_metadata = tree_metadata,
+            .pivot_tolerance = 1.0e-12,
+            .coefficient_source = TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks});
+    generic_tree_solver.set_tree_linearization(tree_linearization);
+
+    TreeNewtonLinearSolverProfile direct_profile;
+    TreeNewtonLinearSolver direct_tree_solver(
+        TreeNewtonLinearSolverContext{.tree_metadata = tree_metadata,
+            .pivot_tolerance = 1.0e-12,
+            .coefficient_source = TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks,
+            .profile = &direct_profile});
+    TreeCoefficientAssemblyTarget* direct_target =
+        direct_tree_solver.direct_tree_coefficient_target();
+    ASSERT_NE(direct_target, nullptr);
+    fixture.assemble_tree_coefficients(*direct_target, current_time);
+
+    expect_structured_coefficients_near(generic_tree_solver.structured_coefficient_values(),
+        direct_tree_solver.structured_coefficient_values(), 1.0e-12);
+
+    Core::LinAlg::Vector<double> sparse_delta(*fixture.row_map, true);
+    Core::LinAlg::Vector<double> direct_tree_delta(*fixture.row_map, true);
+    SparseNewtonLinearSolver sparse_solver(SparseNewtonLinearSolverContext{
+        .comm = MPI_COMM_WORLD,
+        .linear_solver_parameters = fixture.solver_params,
+        .solver_params_callback = fixture.solver_params_callback,
+        .correction_map = *fixture.row_map,
+    });
+    const NewtonLinearSystemMetadata metadata{.current_time = current_time,
+        .time_step_size_dt = params.dynamics.time_increment,
+        .nonlinear_iteration = 0};
+    sparse_solver.solve(*fixture.sysmat, residual, *fixture.x, metadata, sparse_delta);
+    direct_tree_solver.solve(*fixture.sysmat, residual, *fixture.x, metadata, direct_tree_delta);
+
+    expect_vectors_near(sparse_delta, direct_tree_delta, 1.0e-9);
+    EXPECT_EQ(direct_profile.coefficient_lookup_count, 0u);
   }
 
   void expect_forced_batch_tree_profile(const TreeNewtonLinearSolverProfile& profile,
@@ -1166,6 +1239,28 @@ namespace
   {
     compare_reused_structured_tree_solver_corrections(
         "tree_linear_reused_structured_solver", make_mixed_airway_terminal_unit_parameters(0.1));
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests, DirectStructuredAssemblyRigidAirwaysMatchesGenericPath)
+  {
+    compare_direct_and_generic_structured_coefficients(
+        "tree_linear_direct_structured_rigid_airways", make_serial_airway_parameters(0.1), false);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests,
+      DirectStructuredAssemblyKelvinVoigtAirwaysMatchesGenericPath)
+  {
+    compare_direct_and_generic_structured_coefficients(
+        "tree_linear_direct_structured_kelvin_voigt_airways",
+        make_kelvin_voigt_airway_parameters(0.1), true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests,
+      DirectStructuredAssemblyMixedTerminalUnitsMatchesGenericPath)
+  {
+    compare_direct_and_generic_structured_coefficients(
+        "tree_linear_direct_structured_mixed_terminal_units",
+        make_mixed_airway_terminal_unit_parameters(0.1), true);
   }
 
   TEST(ReducedLungTreeLinearSolverTests, ForcedBatchLargeRigidAirwaysMatchSparseSolver)

@@ -539,15 +539,14 @@ namespace ReducedLung
           compute_total_terminal_unit_volume(terminal_units, comm);
     }
 
-    void update_tree_linearization(
-        TreeLinearization& linearization, const BoundaryConditionContainer& boundary_conditions)
+    void update_tree_linearization(TreeCoefficientAssemblyTarget& target,
+        const BoundaryConditionContainer& boundary_conditions)
     {
       for (const auto& model : boundary_conditions.models)
       {
         for (size_t i = 0; i < model.data.size(); ++i)
         {
-          linearization.append_value(
-              model.data.local_equation_id[i], model.data.local_dof_id[i], 1.0);
+          target.append_value(model.data.local_equation_id[i], model.data.local_dof_id[i], 1.0);
         }
       }
     }

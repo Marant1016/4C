@@ -60,12 +60,13 @@ namespace ReducedLung::Airways
   /**
    * @brief Assemble static airway structured tree-linearization row patterns.
    */
-  void update_static_tree_linearization(TreeLinearization& linearization, AirwayContainer& airways);
+  void update_static_tree_linearization(
+      TreeCoefficientAssemblyTarget& target, AirwayContainer& airways);
 
   /**
    * @brief Update dynamic airway structured tree-linearization coefficients for all local blocks.
    */
-  void update_tree_linearization(TreeLinearization& linearization, AirwayContainer& airways,
+  void update_tree_linearization(TreeCoefficientAssemblyTarget& target, AirwayContainer& airways,
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt);
 
   /**

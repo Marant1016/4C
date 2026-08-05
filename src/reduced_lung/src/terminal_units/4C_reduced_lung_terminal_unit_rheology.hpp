@@ -29,6 +29,7 @@ namespace ReducedLung::TerminalUnits
   struct KelvinVoigt
   {
     std::vector<double> viscosity_eta;
+    std::vector<double> tree_linearization_grad_q;
   };
 
   /**

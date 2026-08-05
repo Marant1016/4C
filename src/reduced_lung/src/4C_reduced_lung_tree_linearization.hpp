@@ -10,6 +10,7 @@
 
 #include "4C_config.hpp"
 
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -17,6 +18,19 @@ FOUR_C_NAMESPACE_OPEN
 
 namespace ReducedLung
 {
+  class TreeCoefficientAssemblyTarget
+  {
+   public:
+    virtual ~TreeCoefficientAssemblyTarget() = default;
+
+    virtual void append_value(int local_row_id, int local_dof_id, double value) = 0;
+
+    virtual void replace_value(int local_row_id, int local_dof_id, double value) = 0;
+
+    virtual void replace_values(std::span<const int> local_row_ids,
+        std::span<const int> local_dof_ids, std::span<const double> values);
+  };
+
   /**
    * @brief Structured local derivative storage for the tree Newton linear solver.
    *
@@ -25,7 +39,7 @@ namespace ReducedLung
    * currently performs on the completed sparse Jacobian, but avoids constructing that sparse
    * matrix for the production `NewtonTree` path.
    */
-  class TreeLinearization
+  class TreeLinearization : public TreeCoefficientAssemblyTarget
   {
    public:
     TreeLinearization() = default;
@@ -40,9 +54,12 @@ namespace ReducedLung
 
     void set_value(int local_row_id, int local_dof_id, double value);
 
-    void append_value(int local_row_id, int local_dof_id, double value);
+    void append_value(int local_row_id, int local_dof_id, double value) override;
 
-    void replace_value(int local_row_id, int local_dof_id, double value);
+    void replace_value(int local_row_id, int local_dof_id, double value) override;
+
+    void replace_values(std::span<const int> local_row_ids, std::span<const int> local_dof_ids,
+        std::span<const double> values) override;
 
     [[nodiscard]] double value(int local_row_id, int local_dof_id) const;
 

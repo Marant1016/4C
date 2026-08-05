@@ -62,6 +62,7 @@ namespace Core::Rebalance
 namespace ReducedLung
 {
   struct NoxSolverProfile;
+  class TreeCoefficientAssemblyTarget;
   class TreeLinearization;
 
   /**
@@ -80,11 +81,12 @@ namespace ReducedLung
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double current_time,
         double time_step_size_dt)>;
 
-    using TreeLinearizationAssembler = std::function<void(TreeLinearization& linearization,
+    using TreeLinearizationAssembler = std::function<void(TreeCoefficientAssemblyTarget& target,
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double current_time,
         double time_step_size_dt)>;
 
-    using StaticTreeLinearizationAssembler = std::function<void(TreeLinearization& linearization)>;
+    using StaticTreeLinearizationAssembler =
+        std::function<void(TreeCoefficientAssemblyTarget& target)>;
 
     using TreeLinearizationCapacityInitializer =
         std::function<void(TreeLinearization& linearization)>;

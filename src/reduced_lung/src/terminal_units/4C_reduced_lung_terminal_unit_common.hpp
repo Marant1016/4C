@@ -22,6 +22,7 @@ FOUR_C_NAMESPACE_OPEN
 namespace ReducedLung
 {
   struct RuntimeOutputCollector;
+  class TreeCoefficientAssemblyTarget;
   class TreeLinearization;
 }  // namespace ReducedLung
 
@@ -106,12 +107,12 @@ namespace ReducedLung::TerminalUnits
 
   ///< Callback type for structured tree linearization block assembly.
   using TreeLinearizationEvaluator = std::function<void(TerminalUnitData& model_data,
-      TreeLinearization& linearization,
+      TreeCoefficientAssemblyTarget& target,
       const Core::LinAlg::Vector<double>& locally_relevant_dof_vector, double time_step_size_dt)>;
 
   ///< Callback type for one-time structured tree-linearization row-pattern assembly.
   using StaticTreeLinearizationEvaluator =
-      std::function<void(TerminalUnitData& model_data, TreeLinearization& linearization)>;
+      std::function<void(TerminalUnitData& model_data, TreeCoefficientAssemblyTarget& target)>;
 
   ///< Callback type for nonlinear-iteration internal state synchronization.
   using InternalStateUpdater = std::function<void(TerminalUnitData& model_data,
