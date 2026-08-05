@@ -94,6 +94,7 @@ namespace ReducedLung
       FOUR_C_THROW("ReducedLung::NewtonSolver requires at least one Jacobian assembler callback.");
     }
     if (linear_solver_->linearization_type() == NewtonLinearizationType::StructuredTreeBlocks &&
+        assembly_pipeline_.tree_linearization_static_assemblers.empty() &&
         assembly_pipeline_.tree_linearization_assemblers.empty())
     {
       FOUR_C_THROW(
@@ -236,12 +237,16 @@ namespace ReducedLung
     const auto clear_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
     if (tree_linearization_.num_rows() == num_rows && tree_linearization_.num_dofs() == num_dofs)
     {
-      tree_linearization_.clear_values();
+      if (!tree_linearization_static_initialized_)
+      {
+        tree_linearization_.clear_values();
+      }
     }
     else
     {
       tree_linearization_.reset(num_rows, num_dofs);
       tree_linearization_capacity_initialized_ = false;
+      tree_linearization_static_initialized_ = false;
     }
     if (!tree_linearization_capacity_initialized_)
     {
@@ -251,6 +256,15 @@ namespace ReducedLung
         initialize_capacity(tree_linearization_);
       }
       tree_linearization_capacity_initialized_ = true;
+    }
+    if (!tree_linearization_static_initialized_)
+    {
+      for (const auto& tree_linearization_static_assembler :
+          assembly_pipeline_.tree_linearization_static_assemblers)
+      {
+        tree_linearization_static_assembler.callback(tree_linearization_);
+      }
+      tree_linearization_static_initialized_ = true;
     }
     if (profile_ != nullptr)
     {

@@ -658,6 +658,16 @@ namespace
     {
       TreeLinearization linearization(
           row_map->num_my_elements(), locally_relevant_dof_map->num_my_elements());
+      for (const auto& initialize_capacity :
+          assembly_pipeline.tree_linearization_capacity_initializers)
+      {
+        initialize_capacity(linearization);
+      }
+      for (const auto& tree_linearization_static_assembler :
+          assembly_pipeline.tree_linearization_static_assemblers)
+      {
+        tree_linearization_static_assembler.callback(linearization);
+      }
       for (const auto& tree_linearization_assembler :
           assembly_pipeline.tree_linearization_assemblers)
       {

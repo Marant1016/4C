@@ -30,6 +30,7 @@ namespace ReducedLung::Airways
     WallModel wall_model;
     ResidualEvaluator residual_evaluator;
     JacobianEvaluator jacobian_evaluator;
+    StaticTreeLinearizationEvaluator static_tree_linearization_evaluator;
     TreeLinearizationEvaluator tree_linearization_evaluator;
     InternalStateUpdater internal_state_updater;
     EndOfTimestepRoutine end_of_timestep_routine;
@@ -57,7 +58,12 @@ namespace ReducedLung::Airways
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt);
 
   /**
-   * @brief Assemble airway structured tree-linearization contributions for all local blocks.
+   * @brief Assemble static airway structured tree-linearization row patterns.
+   */
+  void update_static_tree_linearization(TreeLinearization& linearization, AirwayContainer& airways);
+
+  /**
+   * @brief Update dynamic airway structured tree-linearization coefficients for all local blocks.
    */
   void update_tree_linearization(TreeLinearization& linearization, AirwayContainer& airways,
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt);

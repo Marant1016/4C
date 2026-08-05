@@ -46,6 +46,15 @@ namespace ReducedLung
       }
     }
 
+    void update_static_tree_linearization(
+        TreeLinearization& linearization, TerminalUnitContainer& terminal_units)
+    {
+      for (auto& model : terminal_units.models)
+      {
+        model.static_tree_linearization_evaluator(model.data, linearization);
+      }
+    }
+
     void update_tree_linearization(TreeLinearization& linearization,
         TerminalUnitContainer& terminal_units,
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
@@ -162,6 +171,8 @@ namespace ReducedLung
             Rheology::make_residual_evaluator(model.rheological_model, elastic_pressure_evaluator);
         model.jacobian_evaluator = Rheology::make_jacobian_evaluator(
             model.rheological_model, elastic_pressure_partials_evaluator);
+        model.static_tree_linearization_evaluator =
+            Rheology::make_static_tree_linearization_evaluator(model.rheological_model);
         model.tree_linearization_evaluator = Rheology::make_tree_linearization_evaluator(
             model.rheological_model, elastic_pressure_partials_evaluator);
         // Assembly reads the reference volume from TerminalUnitData::reference_volume_context, so

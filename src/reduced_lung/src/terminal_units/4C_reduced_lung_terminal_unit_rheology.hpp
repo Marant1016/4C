@@ -110,7 +110,13 @@ namespace ReducedLung::TerminalUnits::Rheology
       Elasticity::ElasticPressurePartialsEvaluator elastic_pressure_partials_evaluator);
 
   /**
-   * @brief Build structured tree-linearization evaluator for the concrete rheology variant.
+   * @brief Build static structured tree-linearization row-pattern evaluator.
+   */
+  StaticTreeLinearizationEvaluator make_static_tree_linearization_evaluator(
+      RheologicalModel& rheological_model);
+
+  /**
+   * @brief Build dynamic structured tree-linearization evaluator for the concrete rheology variant.
    */
   TreeLinearizationEvaluator make_tree_linearization_evaluator(RheologicalModel& rheological_model,
       Elasticity::ElasticPressurePartialsEvaluator elastic_pressure_partials_evaluator);

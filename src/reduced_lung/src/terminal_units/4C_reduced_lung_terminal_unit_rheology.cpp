@@ -177,9 +177,9 @@ namespace ReducedLung::TerminalUnits::Rheology
         const double alpha = (-elastic_pressure_partials.dp_el_dv0[i] +
                                  damping * q * context.inv_v0_eff * context.inv_v0_eff) *
                              context.dv0_dp;
-        target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
-        target.append_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
-        target.append_value(data.local_row_id[i], data.lid_q[i],
+        target.replace_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
+        target.replace_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
+        target.replace_value(data.local_row_id[i], data.lid_q[i],
             -elastic_pressure_partials.dp_el_dq[i] - damping * context.inv_v0_eff);
       }
     }
@@ -201,10 +201,20 @@ namespace ReducedLung::TerminalUnits::Rheology
         const double alpha = (-elastic_pressure_partials.dp_el_dv0[i] +
                                  damping * q * context.inv_v0_eff * context.inv_v0_eff) *
                              context.dv0_dp;
-        target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
-        target.append_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
-        target.append_value(data.local_row_id[i], data.lid_q[i],
+        target.replace_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
+        target.replace_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
+        target.replace_value(data.local_row_id[i], data.lid_q[i],
             -elastic_pressure_partials.dp_el_dq[i] - damping * context.inv_v0_eff);
+      }
+    }
+
+    void initialize_tree_linearization(TreeLinearization& target, TerminalUnitData& data)
+    {
+      for (size_t i = 0; i < data.number_of_elements(); ++i)
+      {
+        target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0);
+        target.append_value(data.local_row_id[i], data.lid_p2[i], -1.0);
+        target.append_value(data.local_row_id[i], data.lid_q[i], 0.0);
       }
     }
 
@@ -305,6 +315,18 @@ namespace ReducedLung::TerminalUnits::Rheology
           {
             FOUR_C_THROW("Unknown terminal-unit rheological model.");
           }
+        },
+        rheological_model);
+  }
+
+  StaticTreeLinearizationEvaluator make_static_tree_linearization_evaluator(
+      RheologicalModel& rheological_model)
+  {
+    return std::visit(
+        [](auto& /*model*/) -> StaticTreeLinearizationEvaluator
+        {
+          return [](TerminalUnitData& data, TreeLinearization& target)
+          { initialize_tree_linearization(target, data); };
         },
         rheological_model);
   }

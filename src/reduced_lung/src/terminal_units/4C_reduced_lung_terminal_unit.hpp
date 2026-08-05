@@ -33,6 +33,7 @@ namespace ReducedLung::TerminalUnits
     RecruitmentModel recruitment_model;
     ResidualEvaluator residual_evaluator;
     JacobianEvaluator jacobian_evaluator;
+    StaticTreeLinearizationEvaluator static_tree_linearization_evaluator;
     TreeLinearizationEvaluator tree_linearization_evaluator;
     InternalStateUpdater internal_state_updater;
     EndOfTimestepRoutine end_of_timestep_routine;
@@ -61,7 +62,13 @@ namespace ReducedLung::TerminalUnits
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt);
 
   /**
-   * @brief Assemble terminal-unit structured tree-linearization contributions.
+   * @brief Assemble static terminal-unit structured tree-linearization row patterns.
+   */
+  void update_static_tree_linearization(
+      TreeLinearization& linearization, TerminalUnitContainer& terminal_units);
+
+  /**
+   * @brief Update dynamic terminal-unit structured tree-linearization coefficients.
    */
   void update_tree_linearization(TreeLinearization& linearization,
       TerminalUnitContainer& terminal_units,

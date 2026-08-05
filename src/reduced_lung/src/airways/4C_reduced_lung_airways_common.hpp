@@ -90,6 +90,10 @@ namespace ReducedLung::Airways
       std::function<void(const AirwayData& data, TreeLinearization& linearization,
           const Core::LinAlg::Vector<double>& locally_relevant_dofs, double time_step_size_dt)>;
 
+  ///< Callback type for one-time structured tree-linearization row-pattern assembly.
+  using StaticTreeLinearizationEvaluator =
+      std::function<void(const AirwayData& data, TreeLinearization& linearization)>;
+
   ///< Callback type for nonlinear-iteration internal state synchronization.
   using InternalStateUpdater = std::function<void(AirwayData& data,
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double time_step_size_dt)>;

@@ -74,6 +74,22 @@ namespace ReducedLung
     rows_[static_cast<std::size_t>(local_row_id)].emplace_back(local_dof_id, value);
   }
 
+  void TreeLinearization::replace_value(int local_row_id, int local_dof_id, double value)
+  {
+    FOUR_C_ASSERT_ALWAYS(local_row_id >= 0 && local_row_id < num_rows_,
+        "Tree linearization row {} is outside [0, {}).", local_row_id, num_rows_);
+    FOUR_C_ASSERT_ALWAYS(local_dof_id >= 0 && local_dof_id < num_dofs_,
+        "Tree linearization dof {} is outside [0, {}).", local_dof_id, num_dofs_);
+
+    auto& row = rows_[static_cast<std::size_t>(local_row_id)];
+    const auto entry = std::find_if(row.begin(), row.end(),
+        [local_dof_id](const auto& coefficient) { return coefficient.first == local_dof_id; });
+    FOUR_C_ASSERT_ALWAYS(entry != row.end(),
+        "Tree linearization row {} does not contain dof {} for replacement.", local_row_id,
+        local_dof_id);
+    entry->second = value;
+  }
+
   double TreeLinearization::value(int local_row_id, int local_dof_id) const
   {
     FOUR_C_ASSERT_ALWAYS(local_row_id >= 0 && local_row_id < num_rows_,

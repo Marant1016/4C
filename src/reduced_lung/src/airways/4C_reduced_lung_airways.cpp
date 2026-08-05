@@ -24,6 +24,14 @@ namespace ReducedLung::Airways
     }
   }
 
+  void update_static_tree_linearization(TreeLinearization& linearization, AirwayContainer& airways)
+  {
+    for (auto& model : airways.models)
+    {
+      model.static_tree_linearization_evaluator(model.data, linearization);
+    }
+  }
+
   void update_tree_linearization(TreeLinearization& linearization, AirwayContainer& airways,
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
   {
@@ -120,6 +128,8 @@ namespace ReducedLung::Airways
           WallMechanics::make_residual_evaluator(model.wall_model, model.flow_model);
       model.jacobian_evaluator =
           WallMechanics::make_jacobian_evaluator(model.wall_model, model.flow_model);
+      model.static_tree_linearization_evaluator =
+          WallMechanics::make_static_tree_linearization_evaluator(model.wall_model);
       model.tree_linearization_evaluator =
           WallMechanics::make_tree_linearization_evaluator(model.wall_model, model.flow_model);
       model.internal_state_updater = WallMechanics::make_internal_state_updater(

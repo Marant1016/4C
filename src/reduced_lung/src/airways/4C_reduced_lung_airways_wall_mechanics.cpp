@@ -148,9 +148,7 @@ namespace ReducedLung::Airways::WallMechanics
   {
     for (size_t i = 0; i < data.number_of_elements(); i++)
     {
-      target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0);
-      target.append_value(data.local_row_id[i], data.lid_p2[i], -1.0);
-      target.append_value(
+      target.replace_value(
           data.local_row_id[i], data.lid_q1[i], -resistance_derivative[i] - inertia_derivative[i]);
     }
   }
@@ -167,17 +165,43 @@ namespace ReducedLung::Airways::WallMechanics
       const int momentum_row = data.local_row_id[i];
       const int mass_row = data.local_row_id[i] + 1;
 
+      target.replace_value(
+          momentum_row, data.lid_q1[i], resistance_derivative_q1[i] + inertia_derivative_q1[i]);
+      target.replace_value(
+          momentum_row, data.lid_q2[i], resistance_derivative_q2[i] + inertia_derivative_q2[i]);
+
+      target.replace_value(mass_row, data.lid_q1[i], viscous_wall_resistance_derivative_q1[i]);
+      target.replace_value(mass_row, data.lid_q2[i], viscous_wall_resistance_derivative_q2[i]);
+    }
+  }
+
+  void initialize_rigid_wall_tree_linearization(TreeLinearization& target, const AirwayData& data)
+  {
+    for (size_t i = 0; i < data.number_of_elements(); ++i)
+    {
+      target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0);
+      target.append_value(data.local_row_id[i], data.lid_p2[i], -1.0);
+      target.append_value(data.local_row_id[i], data.lid_q1[i], 0.0);
+    }
+  }
+
+  void initialize_kelvin_voigt_wall_tree_linearization(
+      TreeLinearization& target, const AirwayData& data)
+  {
+    for (size_t i = 0; i < data.number_of_elements(); ++i)
+    {
+      const int momentum_row = data.local_row_id[i];
+      const int mass_row = momentum_row + 1;
+
       target.append_value(momentum_row, data.lid_p1[i], 1.0);
       target.append_value(momentum_row, data.lid_p2[i], -1.0);
-      target.append_value(
-          momentum_row, data.lid_q1[i], resistance_derivative_q1[i] + inertia_derivative_q1[i]);
-      target.append_value(
-          momentum_row, data.lid_q2[i], resistance_derivative_q2[i] + inertia_derivative_q2[i]);
+      target.append_value(momentum_row, data.lid_q1[i], 0.0);
+      target.append_value(momentum_row, data.lid_q2[i], 0.0);
 
       target.append_value(mass_row, data.lid_p1[i], 1.0);
       target.append_value(mass_row, data.lid_p2[i], 1.0);
-      target.append_value(mass_row, data.lid_q1[i], viscous_wall_resistance_derivative_q1[i]);
-      target.append_value(mass_row, data.lid_q2[i], viscous_wall_resistance_derivative_q2[i]);
+      target.append_value(mass_row, data.lid_q1[i], 0.0);
+      target.append_value(mass_row, data.lid_q2[i], 0.0);
     }
   }
 
@@ -328,6 +352,30 @@ namespace ReducedLung::Airways::WallMechanics
                   as_const_span(viscous_wall_resistance_derivative_q1),
                   as_const_span(viscous_wall_resistance_derivative_q2), dt);
             };
+          }
+          else
+          {
+            FOUR_C_THROW("Unknown airway wall model.");
+          }
+        },
+        wall_model);
+  }
+
+  StaticTreeLinearizationEvaluator make_static_tree_linearization_evaluator(WallModel& wall_model)
+  {
+    return std::visit(
+        [](auto& wall_model_data) -> StaticTreeLinearizationEvaluator
+        {
+          using WallModelType = std::decay_t<decltype(wall_model_data)>;
+          if constexpr (std::is_same_v<WallModelType, RigidWall>)
+          {
+            return [](const AirwayData& airway_data, TreeLinearization& target)
+            { initialize_rigid_wall_tree_linearization(target, airway_data); };
+          }
+          else if constexpr (std::is_same_v<WallModelType, KelvinVoigtWall>)
+          {
+            return [](const AirwayData& airway_data, TreeLinearization& target)
+            { initialize_kelvin_voigt_wall_tree_linearization(target, airway_data); };
           }
           else
           {
