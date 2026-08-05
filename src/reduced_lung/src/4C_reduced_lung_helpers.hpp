@@ -84,6 +84,9 @@ namespace ReducedLung
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double current_time,
         double time_step_size_dt)>;
 
+    using TreeLinearizationCapacityInitializer =
+        std::function<void(TreeLinearization& linearization)>;
+
     enum class TreeLinearizationAssemblyPhase
     {
       Airways,
@@ -104,6 +107,7 @@ namespace ReducedLung
 
     std::vector<ResidualAssembler> residual_assemblers;
     std::vector<JacobianAssembler> jacobian_assemblers;
+    std::vector<TreeLinearizationCapacityInitializer> tree_linearization_capacity_initializers;
     std::vector<NamedTreeLinearizationAssembler> tree_linearization_assemblers;
     std::vector<StateUpdater> state_updaters;
   };

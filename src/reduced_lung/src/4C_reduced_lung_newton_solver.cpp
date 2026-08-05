@@ -241,6 +241,16 @@ namespace ReducedLung
     else
     {
       tree_linearization_.reset(num_rows, num_dofs);
+      tree_linearization_capacity_initialized_ = false;
+    }
+    if (!tree_linearization_capacity_initialized_)
+    {
+      for (const auto& initialize_capacity :
+          assembly_pipeline_.tree_linearization_capacity_initializers)
+      {
+        initialize_capacity(tree_linearization_);
+      }
+      tree_linearization_capacity_initialized_ = true;
     }
     if (profile_ != nullptr)
     {

@@ -36,6 +36,8 @@ namespace ReducedLung
 
     void clear_values();
 
+    void reserve_row_entries(int local_row_id, int entry_count);
+
     void set_value(int local_row_id, int local_dof_id, double value);
 
     void append_value(int local_row_id, int local_dof_id, double value);

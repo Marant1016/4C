@@ -35,6 +35,16 @@ namespace ReducedLung
     }
   }
 
+  void TreeLinearization::reserve_row_entries(int local_row_id, int entry_count)
+  {
+    FOUR_C_ASSERT_ALWAYS(local_row_id >= 0 && local_row_id < num_rows_,
+        "Tree linearization row {} is outside [0, {}).", local_row_id, num_rows_);
+    FOUR_C_ASSERT_ALWAYS(entry_count >= 0,
+        "Tree linearization row capacity must be non-negative, got {}.", entry_count);
+
+    rows_[static_cast<std::size_t>(local_row_id)].reserve(static_cast<std::size_t>(entry_count));
+  }
+
   void TreeLinearization::set_value(int local_row_id, int local_dof_id, double value)
   {
     FOUR_C_ASSERT_ALWAYS(local_row_id >= 0 && local_row_id < num_rows_,

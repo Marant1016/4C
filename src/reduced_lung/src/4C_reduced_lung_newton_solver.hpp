@@ -96,6 +96,7 @@ namespace ReducedLung
     Core::LinAlg::Vector<double> residual_;
     Core::LinAlg::Vector<double> delta_;
     TreeLinearization tree_linearization_;
+    bool tree_linearization_capacity_initialized_ = false;
 
     double dt_;
     double current_time_;

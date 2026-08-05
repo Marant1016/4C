@@ -28,6 +28,7 @@
 #include "4C_reduced_lung_solver_profile.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
 #include "4C_reduced_lung_terminal_unit_model_registry.hpp"
+#include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_utils_exceptions.hpp"
 
 #include <algorithm>
@@ -124,6 +125,69 @@ namespace ReducedLung
         {
           BoundaryConditions::update_jacobian(
               jacobian, boundary_conditions, locally_relevant_dofs, current_time);
+        });
+
+    pipeline.tree_linearization_capacity_initializers.emplace_back(
+        [&airways](TreeLinearization& linearization)
+        {
+          for (const auto& model : airways.models)
+          {
+            const auto& data = model.data;
+            for (size_t i = 0; i < data.number_of_elements(); ++i)
+            {
+              if (data.n_state_equations == 1)
+              {
+                linearization.reserve_row_entries(data.local_row_id[i], 3);
+              }
+              else
+              {
+                for (int row_offset = 0; row_offset < data.n_state_equations; ++row_offset)
+                {
+                  linearization.reserve_row_entries(data.local_row_id[i] + row_offset, 4);
+                }
+              }
+            }
+          }
+        });
+    pipeline.tree_linearization_capacity_initializers.emplace_back(
+        [&terminal_units](TreeLinearization& linearization)
+        {
+          for (const auto& model : terminal_units.models)
+          {
+            const auto& data = model.data;
+            for (size_t i = 0; i < data.number_of_elements(); ++i)
+            {
+              linearization.reserve_row_entries(data.local_row_id[i], 3);
+            }
+          }
+        });
+    pipeline.tree_linearization_capacity_initializers.emplace_back(
+        [&connections, &bifurcations](TreeLinearization& linearization)
+        {
+          for (size_t i = 0; i < connections.size(); ++i)
+          {
+            const int pressure_row = connections.first_local_equation_id[i];
+            linearization.reserve_row_entries(pressure_row, 2);
+            linearization.reserve_row_entries(pressure_row + 1, 2);
+          }
+          for (size_t i = 0; i < bifurcations.size(); ++i)
+          {
+            const int child_1_pressure_row = bifurcations.first_local_equation_id[i];
+            linearization.reserve_row_entries(child_1_pressure_row, 2);
+            linearization.reserve_row_entries(child_1_pressure_row + 1, 2);
+            linearization.reserve_row_entries(child_1_pressure_row + 2, 3);
+          }
+        });
+    pipeline.tree_linearization_capacity_initializers.emplace_back(
+        [&boundary_conditions](TreeLinearization& linearization)
+        {
+          for (const auto& model : boundary_conditions.models)
+          {
+            for (const int local_equation_id : model.data.local_equation_id)
+            {
+              linearization.reserve_row_entries(local_equation_id, 1);
+            }
+          }
         });
 
     using TreeAssemblyPhase = ReducedLungAssemblyPipeline::TreeLinearizationAssemblyPhase;
