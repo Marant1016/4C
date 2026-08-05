@@ -15,6 +15,7 @@
 #include "4C_utils_exceptions.hpp"
 
 #include <functional>
+#include <span>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -113,34 +114,32 @@ namespace ReducedLung::Airways::FlowResistance
   /**
    * @brief Evaluator type for inertia contributions.
    */
-  using InertiaEvaluator =
-      std::function<std::vector<double>(const AirwayData&, const std::vector<double>& area)>;
+  using InertiaEvaluator = std::function<void(
+      const AirwayData&, const std::vector<double>& area, std::span<double> inertia)>;
 
   /**
    * @brief Evaluator type for flow-resistance values.
    */
-  using FlowResistanceEvaluator = std::function<std::vector<double>(
-      const AirwayData&, const Core::LinAlg::Vector<double>&, const std::vector<double>&)>;
+  using FlowResistanceEvaluator = std::function<void(const AirwayData&,
+      const Core::LinAlg::Vector<double>&, const std::vector<double>&, std::span<double>)>;
 
   /**
    * @brief Evaluator type for flow-resistance derivative in rigid-wall equations.
    */
-  using FlowResistanceDerivativeEvaluatorRigid = std::function<std::vector<double>(
-      const AirwayData&, const Core::LinAlg::Vector<double>&, double)>;
+  using FlowResistanceDerivativeEvaluatorRigid = std::function<void(
+      const AirwayData&, const Core::LinAlg::Vector<double>&, double, std::span<double>)>;
 
   /**
    * @brief Evaluator type for flow-resistance derivatives in Kelvin-Voigt wall equations.
    */
-  using FlowResistanceDerivativeEvaluatorKelvinVoigt =
-      std::function<std::pair<std::vector<double>, std::vector<double>>(
-          const AirwayData&, const Core::LinAlg::Vector<double>&, double)>;
+  using FlowResistanceDerivativeEvaluatorKelvinVoigt = std::function<void(const AirwayData&,
+      const Core::LinAlg::Vector<double>&, double, std::span<double>, std::span<double>)>;
 
   /**
    * @brief Evaluator type for inertia derivatives in Kelvin-Voigt wall equations.
    */
-  using InertiaDerivativeEvaluatorKelvinVoigt =
-      std::function<std::pair<std::vector<double>, std::vector<double>>(
-          const AirwayData&, const Core::LinAlg::Vector<double>&, double)>;
+  using InertiaDerivativeEvaluatorKelvinVoigt = std::function<void(const AirwayData&,
+      const Core::LinAlg::Vector<double>&, double, std::span<double>, std::span<double>)>;
 
   /**
    * @brief Callback type for flow-model internal state updates.

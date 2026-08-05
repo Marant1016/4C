@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cmath>
+#include <span>
 #include <type_traits>
 #include <vector>
 
@@ -19,9 +20,23 @@ FOUR_C_NAMESPACE_OPEN
 
 namespace ReducedLung::Airways::WallMechanics
 {
+  namespace
+  {
+    std::span<double> resize_scratch(std::vector<double>& scratch, size_t size)
+    {
+      scratch.resize(size);
+      return std::span<double>(scratch.data(), scratch.size());
+    }
+
+    std::span<const double> as_const_span(const std::vector<double>& values)
+    {
+      return std::span<const double>(values.data(), values.size());
+    }
+  }  // namespace
+
   void evaluate_rigid_wall_residual(Core::LinAlg::Vector<double>& target, const AirwayData& data,
-      const Core::LinAlg::Vector<double>& locally_relevant_dofs,
-      const std::vector<double>& resistance, const std::vector<double>& inertia, double dt)
+      const Core::LinAlg::Vector<double>& locally_relevant_dofs, std::span<const double> resistance,
+      std::span<const double> inertia, double dt)
   {
     for (size_t i = 0; i < data.number_of_elements(); i++)
     {
@@ -37,8 +52,8 @@ namespace ReducedLung::Airways::WallMechanics
 
   void evaluate_kelvin_voigt_wall_residual(Core::LinAlg::Vector<double>& target,
       const KelvinVoigtWall& kelvin_voigt_wall_model, const AirwayData& data,
-      const Core::LinAlg::Vector<double>& locally_relevant_dofs,
-      const std::vector<double>& resistance, const std::vector<double>& inertia, double dt)
+      const Core::LinAlg::Vector<double>& locally_relevant_dofs, std::span<const double> resistance,
+      std::span<const double> inertia, double dt)
   {
     for (size_t i = 0; i < data.number_of_elements(); i++)
     {
@@ -67,8 +82,8 @@ namespace ReducedLung::Airways::WallMechanics
   }
 
   void evaluate_jacobian_rigid_wall(Core::LinAlg::SparseMatrix& target, AirwayData const& data,
-      const std::vector<double>& resistance_derivative,
-      const std::vector<double>& inertia_derivative, double dt)
+      std::span<const double> resistance_derivative, std::span<const double> inertia_derivative,
+      double dt)
   {
     [[maybe_unused]] int err;
     std::array<int, 3> column_indices;
@@ -91,10 +106,11 @@ namespace ReducedLung::Airways::WallMechanics
 
   void evaluate_jacobian_kelvin_voigt_wall(Core::LinAlg::SparseMatrix& target,
       AirwayData const& data, const KelvinVoigtWall& kelvin_voigt_wall_model,
-      const std::pair<std::vector<double>, std::vector<double>>& resistance_derivative,
-      const std::pair<std::vector<double>, std::vector<double>>& inertia_derivative,
-      const std::pair<std::vector<double>, std::vector<double>>& viscous_wall_resistance_derivative,
-      double dt)
+      std::span<const double> resistance_derivative_q1,
+      std::span<const double> resistance_derivative_q2,
+      std::span<const double> inertia_derivative_q1, std::span<const double> inertia_derivative_q2,
+      std::span<const double> viscous_wall_resistance_derivative_q1,
+      std::span<const double> viscous_wall_resistance_derivative_q2, double dt)
   {
     [[maybe_unused]] int err;
     for (size_t i = 0; i < data.number_of_elements(); i++)
@@ -107,29 +123,28 @@ namespace ReducedLung::Airways::WallMechanics
         std::array<int, 4> column_indices;
         std::array<double, 4> values;
         column_indices = {data.lid_p1[i], data.lid_p2[i], data.lid_q1[i], data.lid_q2[i]};
-        values = {1.0, -1.0, resistance_derivative.first[i] + inertia_derivative.first[i],
-            resistance_derivative.second[i] + inertia_derivative.second[i]};
+        values = {1.0, -1.0, resistance_derivative_q1[i] + inertia_derivative_q1[i],
+            resistance_derivative_q2[i] + inertia_derivative_q2[i]};
         target.insert_my_values(momentum_row, 4, values.data(), column_indices.data());
-        values = {1.0, 1.0, viscous_wall_resistance_derivative.first[i],
-            viscous_wall_resistance_derivative.second[i]};
+        values = {1.0, 1.0, viscous_wall_resistance_derivative_q1[i],
+            viscous_wall_resistance_derivative_q2[i]};
         target.insert_my_values(mass_row, 4, values.data(), column_indices.data());
       }
       else
       {
         std::array<int, 2> q_column_indices{data.lid_q1[i], data.lid_q2[i]};
-        std::array<double, 2> grad_q{resistance_derivative.first[i] + inertia_derivative.first[i],
-            resistance_derivative.second[i] + inertia_derivative.second[i]};
+        std::array<double, 2> grad_q{resistance_derivative_q1[i] + inertia_derivative_q1[i],
+            resistance_derivative_q2[i] + inertia_derivative_q2[i]};
         target.replace_my_values(momentum_row, 2, grad_q.data(), q_column_indices.data());
-        grad_q = {viscous_wall_resistance_derivative.first[i],
-            viscous_wall_resistance_derivative.second[i]};
+        grad_q = {
+            viscous_wall_resistance_derivative_q1[i], viscous_wall_resistance_derivative_q2[i]};
         target.replace_my_values(mass_row, 2, grad_q.data(), q_column_indices.data());
       }
     }
   }
 
   void evaluate_tree_linearization_rigid_wall(TreeLinearization& target, AirwayData const& data,
-      const std::vector<double>& resistance_derivative,
-      const std::vector<double>& inertia_derivative)
+      std::span<const double> resistance_derivative, std::span<const double> inertia_derivative)
   {
     for (size_t i = 0; i < data.number_of_elements(); i++)
     {
@@ -141,10 +156,11 @@ namespace ReducedLung::Airways::WallMechanics
   }
 
   void evaluate_tree_linearization_kelvin_voigt_wall(TreeLinearization& target,
-      AirwayData const& data,
-      const std::pair<std::vector<double>, std::vector<double>>& resistance_derivative,
-      const std::pair<std::vector<double>, std::vector<double>>& inertia_derivative,
-      const std::pair<std::vector<double>, std::vector<double>>& viscous_wall_resistance_derivative)
+      AirwayData const& data, std::span<const double> resistance_derivative_q1,
+      std::span<const double> resistance_derivative_q2,
+      std::span<const double> inertia_derivative_q1, std::span<const double> inertia_derivative_q2,
+      std::span<const double> viscous_wall_resistance_derivative_q1,
+      std::span<const double> viscous_wall_resistance_derivative_q2)
   {
     for (size_t i = 0; i < data.number_of_elements(); i++)
     {
@@ -153,25 +169,23 @@ namespace ReducedLung::Airways::WallMechanics
 
       target.append_value(momentum_row, data.lid_p1[i], 1.0);
       target.append_value(momentum_row, data.lid_p2[i], -1.0);
-      target.append_value(momentum_row, data.lid_q1[i],
-          resistance_derivative.first[i] + inertia_derivative.first[i]);
-      target.append_value(momentum_row, data.lid_q2[i],
-          resistance_derivative.second[i] + inertia_derivative.second[i]);
+      target.append_value(
+          momentum_row, data.lid_q1[i], resistance_derivative_q1[i] + inertia_derivative_q1[i]);
+      target.append_value(
+          momentum_row, data.lid_q2[i], resistance_derivative_q2[i] + inertia_derivative_q2[i]);
 
       target.append_value(mass_row, data.lid_p1[i], 1.0);
       target.append_value(mass_row, data.lid_p2[i], 1.0);
-      target.append_value(mass_row, data.lid_q1[i], viscous_wall_resistance_derivative.first[i]);
-      target.append_value(mass_row, data.lid_q2[i], viscous_wall_resistance_derivative.second[i]);
+      target.append_value(mass_row, data.lid_q1[i], viscous_wall_resistance_derivative_q1[i]);
+      target.append_value(mass_row, data.lid_q2[i], viscous_wall_resistance_derivative_q2[i]);
     }
   }
 
-  std::pair<std::vector<double>, std::vector<double>>
-  evaluate_viscous_wall_resistance_derivative_kelvin_voigt(const KelvinVoigtWall& model,
-      const AirwayData& data, const Core::LinAlg::Vector<double>& dofs, double dt)
+  void evaluate_viscous_wall_resistance_derivative_kelvin_voigt(const KelvinVoigtWall& model,
+      const AirwayData& data, const Core::LinAlg::Vector<double>& dofs, double dt,
+      std::span<double> viscous_resistance_derivative_q1,
+      std::span<double> viscous_resistance_derivative_q2)
   {
-    std::vector<double> viscous_resistance_derivative_q1(data.number_of_elements());
-    std::vector<double> viscous_resistance_derivative_q2(data.number_of_elements());
-
     for (size_t i = 0; i < data.number_of_elements(); i++)
     {
       double dRvisc_da =
@@ -193,7 +207,6 @@ namespace ReducedLung::Airways::WallMechanics
                    (model.viscous_resistance_Rvisc[i] + dt / model.compliance_C[i]) -
                    dRvisc_da * da_dq2 * (data.q1_n[i] - data.q2_n[i]));
     }
-    return {viscous_resistance_derivative_q1, viscous_resistance_derivative_q2};
   }
 
   ResidualEvaluator make_residual_evaluator(WallModel& wall_model, FlowModel& flow_model)
@@ -207,15 +220,18 @@ namespace ReducedLung::Airways::WallMechanics
             auto resistance_evaluator =
                 FlowResistance::make_flow_resistance_evaluator_rigid(flow_model);
             auto inertia_evaluator = FlowResistance::make_inertia_evaluator(flow_model);
-            return [resistance_evaluator, inertia_evaluator](const AirwayData& airway_data,
+            return [resistance_evaluator, inertia_evaluator, resistance = std::vector<double>{},
+                       inertia = std::vector<double>{}](const AirwayData& airway_data,
                        Core::LinAlg::Vector<double>& target_vector,
-                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt) mutable
             {
-              auto resistance =
-                  resistance_evaluator(airway_data, locally_relevant_dofs, airway_data.ref_area);
-              auto inertia = inertia_evaluator(airway_data, airway_data.ref_area);
-              evaluate_rigid_wall_residual(
-                  target_vector, airway_data, locally_relevant_dofs, resistance, inertia, dt);
+              const size_t element_count = airway_data.number_of_elements();
+              resistance_evaluator(airway_data, locally_relevant_dofs, airway_data.ref_area,
+                  resize_scratch(resistance, element_count));
+              inertia_evaluator(
+                  airway_data, airway_data.ref_area, resize_scratch(inertia, element_count));
+              evaluate_rigid_wall_residual(target_vector, airway_data, locally_relevant_dofs,
+                  as_const_span(resistance), as_const_span(inertia), dt);
             };
           }
           else if constexpr (std::is_same_v<WallModelType, KelvinVoigtWall>)
@@ -223,15 +239,18 @@ namespace ReducedLung::Airways::WallMechanics
             auto resistance_evaluator =
                 FlowResistance::make_flow_resistance_evaluator_kelvin_voigt(flow_model);
             auto inertia_evaluator = FlowResistance::make_inertia_evaluator(flow_model);
-            return [resistance_evaluator, inertia_evaluator, &wall_model_data](
+            return [resistance_evaluator, inertia_evaluator, &wall_model_data,
+                       resistance = std::vector<double>{}, inertia = std::vector<double>{}](
                        const AirwayData& airway_data, Core::LinAlg::Vector<double>& target_vector,
-                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt) mutable
             {
-              auto resistance =
-                  resistance_evaluator(airway_data, locally_relevant_dofs, wall_model_data.area);
-              auto inertia = inertia_evaluator(airway_data, wall_model_data.area);
+              const size_t element_count = airway_data.number_of_elements();
+              resistance_evaluator(airway_data, locally_relevant_dofs, wall_model_data.area,
+                  resize_scratch(resistance, element_count));
+              inertia_evaluator(
+                  airway_data, wall_model_data.area, resize_scratch(inertia, element_count));
               evaluate_kelvin_voigt_wall_residual(target_vector, wall_model_data, airway_data,
-                  locally_relevant_dofs, resistance, inertia, dt);
+                  locally_relevant_dofs, as_const_span(resistance), as_const_span(inertia), dt);
             };
           }
           else
@@ -253,20 +272,23 @@ namespace ReducedLung::Airways::WallMechanics
             auto resistance_derivative_evaluator =
                 FlowResistance::make_flow_resistance_derivative_evaluator_rigid(flow_model);
             auto inertia_evaluator = FlowResistance::make_inertia_evaluator(flow_model);
-            return [resistance_derivative_evaluator, inertia_evaluator](
-                       const AirwayData& airway_data, Core::LinAlg::SparseMatrix& target,
-                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+            return [resistance_derivative_evaluator, inertia_evaluator,
+                       resistance_derivative = std::vector<double>{},
+                       inertia_derivative = std::vector<double>{}](const AirwayData& airway_data,
+                       Core::LinAlg::SparseMatrix& target,
+                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt) mutable
             {
-              auto resistance_derivative =
-                  resistance_derivative_evaluator(airway_data, locally_relevant_dofs, dt);
-              auto inertia_derivative = [dt, &evaluator = inertia_evaluator, &data = airway_data]()
+              const size_t element_count = airway_data.number_of_elements();
+              resistance_derivative_evaluator(airway_data, locally_relevant_dofs, dt,
+                  resize_scratch(resistance_derivative, element_count));
+              inertia_evaluator(airway_data, airway_data.ref_area,
+                  resize_scratch(inertia_derivative, element_count));
+              for (auto& value : inertia_derivative)
               {
-                auto vals = evaluator(data, data.ref_area);
-                for (auto& v : vals) v /= dt;
-                return vals;
-              }();
-              evaluate_jacobian_rigid_wall(
-                  target, airway_data, resistance_derivative, inertia_derivative, dt);
+                value /= dt;
+              }
+              evaluate_jacobian_rigid_wall(target, airway_data,
+                  as_const_span(resistance_derivative), as_const_span(inertia_derivative), dt);
             };
           }
           else if constexpr (std::is_same_v<WallModelType, KelvinVoigtWall>)
@@ -278,22 +300,33 @@ namespace ReducedLung::Airways::WallMechanics
                 FlowResistance::make_inertia_derivative_evaluator_kelvin_voigt(
                     flow_model, wall_model_data);
 
-            return
-                [resistance_derivative_evaluator, inertia_derivative_evaluator, &wall_model_data](
-                    const AirwayData& airway_data, Core::LinAlg::SparseMatrix& target,
-                    const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+            return [resistance_derivative_evaluator, inertia_derivative_evaluator, &wall_model_data,
+                       resistance_derivative_q1 = std::vector<double>{},
+                       resistance_derivative_q2 = std::vector<double>{},
+                       inertia_derivative_q1 = std::vector<double>{},
+                       inertia_derivative_q2 = std::vector<double>{},
+                       viscous_wall_resistance_derivative_q1 = std::vector<double>{},
+                       viscous_wall_resistance_derivative_q2 = std::vector<double>{}](
+                       const AirwayData& airway_data, Core::LinAlg::SparseMatrix& target,
+                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt) mutable
             {
-              auto resistance_derivative =
-                  resistance_derivative_evaluator(airway_data, locally_relevant_dofs, dt);
-              auto inertia_derivative =
-                  inertia_derivative_evaluator(airway_data, locally_relevant_dofs, dt);
-              auto viscous_wall_resistance_derivative =
-                  evaluate_viscous_wall_resistance_derivative_kelvin_voigt(
-                      wall_model_data, airway_data, locally_relevant_dofs, dt);
+              const size_t element_count = airway_data.number_of_elements();
+              resistance_derivative_evaluator(airway_data, locally_relevant_dofs, dt,
+                  resize_scratch(resistance_derivative_q1, element_count),
+                  resize_scratch(resistance_derivative_q2, element_count));
+              inertia_derivative_evaluator(airway_data, locally_relevant_dofs, dt,
+                  resize_scratch(inertia_derivative_q1, element_count),
+                  resize_scratch(inertia_derivative_q2, element_count));
+              evaluate_viscous_wall_resistance_derivative_kelvin_voigt(wall_model_data, airway_data,
+                  locally_relevant_dofs, dt,
+                  resize_scratch(viscous_wall_resistance_derivative_q1, element_count),
+                  resize_scratch(viscous_wall_resistance_derivative_q2, element_count));
 
               evaluate_jacobian_kelvin_voigt_wall(target, airway_data, wall_model_data,
-                  resistance_derivative, inertia_derivative, viscous_wall_resistance_derivative,
-                  dt);
+                  as_const_span(resistance_derivative_q1), as_const_span(resistance_derivative_q2),
+                  as_const_span(inertia_derivative_q1), as_const_span(inertia_derivative_q2),
+                  as_const_span(viscous_wall_resistance_derivative_q1),
+                  as_const_span(viscous_wall_resistance_derivative_q2), dt);
             };
           }
           else
@@ -316,20 +349,23 @@ namespace ReducedLung::Airways::WallMechanics
             auto resistance_derivative_evaluator =
                 FlowResistance::make_flow_resistance_derivative_evaluator_rigid(flow_model);
             auto inertia_evaluator = FlowResistance::make_inertia_evaluator(flow_model);
-            return [resistance_derivative_evaluator, inertia_evaluator](
-                       const AirwayData& airway_data, TreeLinearization& target,
-                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+            return [resistance_derivative_evaluator, inertia_evaluator,
+                       resistance_derivative = std::vector<double>{},
+                       inertia_derivative = std::vector<double>{}](const AirwayData& airway_data,
+                       TreeLinearization& target,
+                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt) mutable
             {
-              auto resistance_derivative =
-                  resistance_derivative_evaluator(airway_data, locally_relevant_dofs, dt);
-              auto inertia_derivative = [dt, &evaluator = inertia_evaluator, &data = airway_data]()
+              const size_t element_count = airway_data.number_of_elements();
+              resistance_derivative_evaluator(airway_data, locally_relevant_dofs, dt,
+                  resize_scratch(resistance_derivative, element_count));
+              inertia_evaluator(airway_data, airway_data.ref_area,
+                  resize_scratch(inertia_derivative, element_count));
+              for (auto& value : inertia_derivative)
               {
-                auto vals = evaluator(data, data.ref_area);
-                for (auto& v : vals) v /= dt;
-                return vals;
-              }();
-              evaluate_tree_linearization_rigid_wall(
-                  target, airway_data, resistance_derivative, inertia_derivative);
+                value /= dt;
+              }
+              evaluate_tree_linearization_rigid_wall(target, airway_data,
+                  as_const_span(resistance_derivative), as_const_span(inertia_derivative));
             };
           }
           else if constexpr (std::is_same_v<WallModelType, KelvinVoigtWall>)
@@ -341,20 +377,33 @@ namespace ReducedLung::Airways::WallMechanics
                 FlowResistance::make_inertia_derivative_evaluator_kelvin_voigt(
                     flow_model, wall_model_data);
 
-            return [resistance_derivative_evaluator, inertia_derivative_evaluator,
-                       &wall_model_data](const AirwayData& airway_data, TreeLinearization& target,
-                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+            return [resistance_derivative_evaluator, inertia_derivative_evaluator, &wall_model_data,
+                       resistance_derivative_q1 = std::vector<double>{},
+                       resistance_derivative_q2 = std::vector<double>{},
+                       inertia_derivative_q1 = std::vector<double>{},
+                       inertia_derivative_q2 = std::vector<double>{},
+                       viscous_wall_resistance_derivative_q1 = std::vector<double>{},
+                       viscous_wall_resistance_derivative_q2 = std::vector<double>{}](
+                       const AirwayData& airway_data, TreeLinearization& target,
+                       const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt) mutable
             {
-              auto resistance_derivative =
-                  resistance_derivative_evaluator(airway_data, locally_relevant_dofs, dt);
-              auto inertia_derivative =
-                  inertia_derivative_evaluator(airway_data, locally_relevant_dofs, dt);
-              auto viscous_wall_resistance_derivative =
-                  evaluate_viscous_wall_resistance_derivative_kelvin_voigt(
-                      wall_model_data, airway_data, locally_relevant_dofs, dt);
+              const size_t element_count = airway_data.number_of_elements();
+              resistance_derivative_evaluator(airway_data, locally_relevant_dofs, dt,
+                  resize_scratch(resistance_derivative_q1, element_count),
+                  resize_scratch(resistance_derivative_q2, element_count));
+              inertia_derivative_evaluator(airway_data, locally_relevant_dofs, dt,
+                  resize_scratch(inertia_derivative_q1, element_count),
+                  resize_scratch(inertia_derivative_q2, element_count));
+              evaluate_viscous_wall_resistance_derivative_kelvin_voigt(wall_model_data, airway_data,
+                  locally_relevant_dofs, dt,
+                  resize_scratch(viscous_wall_resistance_derivative_q1, element_count),
+                  resize_scratch(viscous_wall_resistance_derivative_q2, element_count));
 
               evaluate_tree_linearization_kelvin_voigt_wall(target, airway_data,
-                  resistance_derivative, inertia_derivative, viscous_wall_resistance_derivative);
+                  as_const_span(resistance_derivative_q1), as_const_span(resistance_derivative_q2),
+                  as_const_span(inertia_derivative_q1), as_const_span(inertia_derivative_q2),
+                  as_const_span(viscous_wall_resistance_derivative_q1),
+                  as_const_span(viscous_wall_resistance_derivative_q2));
             };
           }
           else
