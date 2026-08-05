@@ -357,10 +357,10 @@ namespace ReducedLung
         const int pressure_row = connections.first_local_equation_id[i];
         const int flow_row = pressure_row + 1;
 
-        linearization.set_value(pressure_row, local_dof_ids[ConnectionData::p_out_parent], 1.0);
-        linearization.set_value(pressure_row, local_dof_ids[ConnectionData::p_in_child], -1.0);
-        linearization.set_value(flow_row, local_dof_ids[ConnectionData::q_out_parent], 1.0);
-        linearization.set_value(flow_row, local_dof_ids[ConnectionData::q_in_child], -1.0);
+        linearization.append_value(pressure_row, local_dof_ids[ConnectionData::p_out_parent], 1.0);
+        linearization.append_value(pressure_row, local_dof_ids[ConnectionData::p_in_child], -1.0);
+        linearization.append_value(flow_row, local_dof_ids[ConnectionData::q_out_parent], 1.0);
+        linearization.append_value(flow_row, local_dof_ids[ConnectionData::q_in_child], -1.0);
       }
 
       for (size_t i = 0; i < bifurcations.size(); ++i)
@@ -370,17 +370,17 @@ namespace ReducedLung
         const int child_2_pressure_row = child_1_pressure_row + 1;
         const int flow_row = child_1_pressure_row + 2;
 
-        linearization.set_value(
+        linearization.append_value(
             child_1_pressure_row, local_dof_ids[BifurcationData::p_out_parent], 1.0);
-        linearization.set_value(
+        linearization.append_value(
             child_1_pressure_row, local_dof_ids[BifurcationData::p_in_child_1], -1.0);
-        linearization.set_value(
+        linearization.append_value(
             child_2_pressure_row, local_dof_ids[BifurcationData::p_out_parent], 1.0);
-        linearization.set_value(
+        linearization.append_value(
             child_2_pressure_row, local_dof_ids[BifurcationData::p_in_child_2], -1.0);
-        linearization.set_value(flow_row, local_dof_ids[BifurcationData::q_out_parent], 1.0);
-        linearization.set_value(flow_row, local_dof_ids[BifurcationData::q_in_child_1], -1.0);
-        linearization.set_value(flow_row, local_dof_ids[BifurcationData::q_in_child_2], -1.0);
+        linearization.append_value(flow_row, local_dof_ids[BifurcationData::q_out_parent], 1.0);
+        linearization.append_value(flow_row, local_dof_ids[BifurcationData::q_in_child_1], -1.0);
+        linearization.append_value(flow_row, local_dof_ids[BifurcationData::q_in_child_2], -1.0);
       }
     }
   }  // namespace Junctions

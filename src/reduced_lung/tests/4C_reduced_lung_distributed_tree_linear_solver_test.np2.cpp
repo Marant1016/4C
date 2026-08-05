@@ -312,10 +312,10 @@ namespace
     {
       TreeLinearization linearization(
           row_map->num_my_elements(), locally_relevant_dof_map->num_my_elements());
-      for (const auto& assemble_tree_linearization_callback :
+      for (const auto& tree_linearization_assembler :
           assembly_pipeline.tree_linearization_assemblers)
       {
-        assemble_tree_linearization_callback(
+        tree_linearization_assembler.callback(
             linearization, *locally_relevant_dofs, current_time, params.dynamics.time_increment);
       }
       return linearization;

@@ -133,9 +133,9 @@ namespace ReducedLung::Airways::WallMechanics
   {
     for (size_t i = 0; i < data.number_of_elements(); i++)
     {
-      target.set_value(data.local_row_id[i], data.lid_p1[i], 1.0);
-      target.set_value(data.local_row_id[i], data.lid_p2[i], -1.0);
-      target.set_value(
+      target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0);
+      target.append_value(data.local_row_id[i], data.lid_p2[i], -1.0);
+      target.append_value(
           data.local_row_id[i], data.lid_q1[i], -resistance_derivative[i] - inertia_derivative[i]);
     }
   }
@@ -151,17 +151,17 @@ namespace ReducedLung::Airways::WallMechanics
       const int momentum_row = data.local_row_id[i];
       const int mass_row = data.local_row_id[i] + 1;
 
-      target.set_value(momentum_row, data.lid_p1[i], 1.0);
-      target.set_value(momentum_row, data.lid_p2[i], -1.0);
-      target.set_value(momentum_row, data.lid_q1[i],
+      target.append_value(momentum_row, data.lid_p1[i], 1.0);
+      target.append_value(momentum_row, data.lid_p2[i], -1.0);
+      target.append_value(momentum_row, data.lid_q1[i],
           resistance_derivative.first[i] + inertia_derivative.first[i]);
-      target.set_value(momentum_row, data.lid_q2[i],
+      target.append_value(momentum_row, data.lid_q2[i],
           resistance_derivative.second[i] + inertia_derivative.second[i]);
 
-      target.set_value(mass_row, data.lid_p1[i], 1.0);
-      target.set_value(mass_row, data.lid_p2[i], 1.0);
-      target.set_value(mass_row, data.lid_q1[i], viscous_wall_resistance_derivative.first[i]);
-      target.set_value(mass_row, data.lid_q2[i], viscous_wall_resistance_derivative.second[i]);
+      target.append_value(mass_row, data.lid_p1[i], 1.0);
+      target.append_value(mass_row, data.lid_p2[i], 1.0);
+      target.append_value(mass_row, data.lid_q1[i], viscous_wall_resistance_derivative.first[i]);
+      target.append_value(mass_row, data.lid_q2[i], viscous_wall_resistance_derivative.second[i]);
     }
   }
 

@@ -397,10 +397,10 @@ namespace
     {
       TreeLinearization linearization(
           row_map->num_my_elements(), locally_relevant_dof_map->num_my_elements());
-      for (const auto& assemble_tree_linearization_callback :
+      for (const auto& tree_linearization_assembler :
           assembly_pipeline.tree_linearization_assemblers)
       {
-        assemble_tree_linearization_callback(
+        tree_linearization_assembler.callback(
             linearization, *locally_relevant_dofs, current_time, params.dynamics.time_increment);
       }
       return linearization;
@@ -518,6 +518,20 @@ namespace
         mpi_max(profile.sparse_jacobian_complete_time, MPI_COMM_WORLD) / iterations;
     state.counters["tree_assembly_s"] =
         mpi_max(profile.structured_tree_linearization_assembly_time, MPI_COMM_WORLD) / iterations;
+    state.counters["tree_assembly_clear_s"] =
+        mpi_max(profile.tree_linearization_clear_time, MPI_COMM_WORLD) / iterations;
+    state.counters["tree_assembly_airways_s"] =
+        mpi_max(profile.tree_linearization_airway_time, MPI_COMM_WORLD) / iterations;
+    state.counters["tree_assembly_terminal_units_s"] =
+        mpi_max(profile.tree_linearization_terminal_unit_time, MPI_COMM_WORLD) / iterations;
+    state.counters["tree_assembly_junctions_s"] =
+        mpi_max(profile.tree_linearization_junction_time, MPI_COMM_WORLD) / iterations;
+    state.counters["tree_assembly_boundary_conditions_s"] =
+        mpi_max(profile.tree_linearization_boundary_condition_time, MPI_COMM_WORLD) / iterations;
+    state.counters["tree_assembly_other_s"] =
+        mpi_max(profile.tree_linearization_other_time, MPI_COMM_WORLD) / iterations;
+    state.counters["tree_assembly_solver_update_s"] =
+        mpi_max(profile.tree_linearization_solver_update_time, MPI_COMM_WORLD) / iterations;
     state.counters["linear_solve_s"] =
         mpi_max(profile.linear_solve_time, MPI_COMM_WORLD) / iterations;
   }

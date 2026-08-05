@@ -546,7 +546,8 @@ namespace ReducedLung
       {
         for (size_t i = 0; i < model.data.size(); ++i)
         {
-          linearization.set_value(model.data.local_equation_id[i], model.data.local_dof_id[i], 1.0);
+          linearization.append_value(
+              model.data.local_equation_id[i], model.data.local_dof_id[i], 1.0);
         }
       }
     }

@@ -31,6 +31,30 @@ namespace ReducedLung
     {
       return std::chrono::duration<double>(Clock::now() - start).count();
     }
+
+    void add_tree_linearization_phase_time(NewtonSolverProfile& profile,
+        ReducedLungAssemblyPipeline::TreeLinearizationAssemblyPhase phase, double elapsed_time)
+    {
+      using Phase = ReducedLungAssemblyPipeline::TreeLinearizationAssemblyPhase;
+      switch (phase)
+      {
+        case Phase::Airways:
+          profile.tree_linearization_airway_time += elapsed_time;
+          break;
+        case Phase::TerminalUnits:
+          profile.tree_linearization_terminal_unit_time += elapsed_time;
+          break;
+        case Phase::Junctions:
+          profile.tree_linearization_junction_time += elapsed_time;
+          break;
+        case Phase::BoundaryConditions:
+          profile.tree_linearization_boundary_condition_time += elapsed_time;
+          break;
+        case Phase::Other:
+          profile.tree_linearization_other_time += elapsed_time;
+          break;
+      }
+    }
   }  // namespace
 
   NewtonSolver::NewtonSolver(const NewtonSolverContext& context, double initial_time)
@@ -209,6 +233,7 @@ namespace ReducedLung
     const auto assembly_start = Clock::now();
     const int num_rows = residual_.local_length();
     const int num_dofs = locally_relevant_dofs_.local_length();
+    const auto clear_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
     if (tree_linearization_.num_rows() == num_rows && tree_linearization_.num_dofs() == num_dofs)
     {
       tree_linearization_.clear_values();
@@ -217,13 +242,27 @@ namespace ReducedLung
     {
       tree_linearization_.reset(num_rows, num_dofs);
     }
-    for (const auto& assemble_tree_linearization : assembly_pipeline_.tree_linearization_assemblers)
+    if (profile_ != nullptr)
     {
-      assemble_tree_linearization(tree_linearization_, locally_relevant_dofs_, current_time_, dt_);
+      profile_->tree_linearization_clear_time += elapsed_seconds(clear_start);
     }
+    for (const auto& tree_linearization_assembler :
+        assembly_pipeline_.tree_linearization_assemblers)
+    {
+      const auto phase_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
+      tree_linearization_assembler.callback(
+          tree_linearization_, locally_relevant_dofs_, current_time_, dt_);
+      if (profile_ != nullptr)
+      {
+        add_tree_linearization_phase_time(
+            *profile_, tree_linearization_assembler.phase, elapsed_seconds(phase_start));
+      }
+    }
+    const auto solver_update_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
     linear_solver_->set_tree_linearization(tree_linearization_);
     if (profile_ != nullptr)
     {
+      profile_->tree_linearization_solver_update_time += elapsed_seconds(solver_update_start);
       profile_->structured_tree_linearization_assembly_time += elapsed_seconds(assembly_start);
     }
   }

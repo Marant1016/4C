@@ -479,10 +479,10 @@ namespace
     {
       TreeLinearization linearization(
           row_map->num_my_elements(), locally_relevant_dof_map->num_my_elements());
-      for (const auto& assemble_tree_linearization_callback :
+      for (const auto& tree_linearization_assembler :
           assembly_pipeline.tree_linearization_assemblers)
       {
-        assemble_tree_linearization_callback(
+        tree_linearization_assembler.callback(
             linearization, *locally_relevant_dofs, current_time, params.dynamics.time_increment);
       }
       return linearization;
@@ -591,6 +591,17 @@ namespace
     state.counters["sparse_complete_s"] = profile.sparse_jacobian_complete_time / iterations;
     state.counters["tree_assembly_s"] =
         profile.structured_tree_linearization_assembly_time / iterations;
+    state.counters["tree_assembly_clear_s"] = profile.tree_linearization_clear_time / iterations;
+    state.counters["tree_assembly_airways_s"] = profile.tree_linearization_airway_time / iterations;
+    state.counters["tree_assembly_terminal_units_s"] =
+        profile.tree_linearization_terminal_unit_time / iterations;
+    state.counters["tree_assembly_junctions_s"] =
+        profile.tree_linearization_junction_time / iterations;
+    state.counters["tree_assembly_boundary_conditions_s"] =
+        profile.tree_linearization_boundary_condition_time / iterations;
+    state.counters["tree_assembly_other_s"] = profile.tree_linearization_other_time / iterations;
+    state.counters["tree_assembly_solver_update_s"] =
+        profile.tree_linearization_solver_update_time / iterations;
     state.counters["linear_solve_s"] = profile.linear_solve_time / iterations;
   }
 
@@ -774,10 +785,10 @@ namespace
       TreeLinearization tree_linearization(
           fixture.row_map->num_my_elements(), fixture.locally_relevant_dof_map->num_my_elements());
       phase_start = Clock::now();
-      for (const auto& assemble_tree_linearization_callback :
+      for (const auto& tree_linearization_assembler :
           fixture.assembly_pipeline.tree_linearization_assemblers)
       {
-        assemble_tree_linearization_callback(tree_linearization, *fixture.locally_relevant_dofs,
+        tree_linearization_assembler.callback(tree_linearization, *fixture.locally_relevant_dofs,
             current_time, fixture.params.dynamics.time_increment);
       }
       tree_assembly_time += elapsed_seconds(phase_start);

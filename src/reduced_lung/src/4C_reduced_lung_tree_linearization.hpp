@@ -38,6 +38,8 @@ namespace ReducedLung
 
     void set_value(int local_row_id, int local_dof_id, double value);
 
+    void append_value(int local_row_id, int local_dof_id, double value);
+
     [[nodiscard]] double value(int local_row_id, int local_dof_id) const;
 
     [[nodiscard]] const std::vector<std::pair<int, double>>& entries(int local_row_id) const;

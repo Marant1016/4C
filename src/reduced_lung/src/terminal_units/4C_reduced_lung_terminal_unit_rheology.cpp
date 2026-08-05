@@ -177,9 +177,9 @@ namespace ReducedLung::TerminalUnits::Rheology
         const double alpha = (-elastic_pressure_partials.dp_el_dv0[i] +
                                  damping * q * context.inv_v0_eff * context.inv_v0_eff) *
                              context.dv0_dp;
-        target.set_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
-        target.set_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
-        target.set_value(data.local_row_id[i], data.lid_q[i],
+        target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
+        target.append_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
+        target.append_value(data.local_row_id[i], data.lid_q[i],
             -elastic_pressure_partials.dp_el_dq[i] - damping * context.inv_v0_eff);
       }
     }
@@ -201,9 +201,9 @@ namespace ReducedLung::TerminalUnits::Rheology
         const double alpha = (-elastic_pressure_partials.dp_el_dv0[i] +
                                  damping * q * context.inv_v0_eff * context.inv_v0_eff) *
                              context.dv0_dp;
-        target.set_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
-        target.set_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
-        target.set_value(data.local_row_id[i], data.lid_q[i],
+        target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
+        target.append_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
+        target.append_value(data.local_row_id[i], data.lid_q[i],
             -elastic_pressure_partials.dp_el_dq[i] - damping * context.inv_v0_eff);
       }
     }

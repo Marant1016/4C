@@ -38,6 +38,13 @@ namespace ReducedLung
     double sparse_jacobian_assembly_time = 0.0;
     double sparse_jacobian_complete_time = 0.0;
     double structured_tree_linearization_assembly_time = 0.0;
+    double tree_linearization_clear_time = 0.0;
+    double tree_linearization_airway_time = 0.0;
+    double tree_linearization_terminal_unit_time = 0.0;
+    double tree_linearization_junction_time = 0.0;
+    double tree_linearization_boundary_condition_time = 0.0;
+    double tree_linearization_other_time = 0.0;
+    double tree_linearization_solver_update_time = 0.0;
     double linear_solve_time = 0.0;
     unsigned int solve_count = 0;
     unsigned int last_nonlinear_iterations = 0;
