@@ -90,28 +90,31 @@ namespace ReducedLung::Airways::FlowResistance
       (void)dt;
       assert_output_size(
           resistance_derivative, data.number_of_elements(), "Rigid flow-resistance derivative");
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const double dynamic_viscosity = data.air_properties.dynamic_viscosity;
+      const double density = data.air_properties.density;
+      const double poiseuille_factor = 8.0 * std::numbers::pi * dynamic_viscosity;
+      const double turbulence_factor_base = density / (std::numbers::pi * dynamic_viscosity);
       for (size_t i = 0; i < data.number_of_elements(); i++)
       {
-        const double poiseuille_resistance = evaluate_poiseuille_resistance(data, data.ref_area, i);
-        double R = poiseuille_resistance * model.k_turb[i];
+        const double ref_length = data.ref_length[i];
+        const double ref_area = data.ref_area[i];
+        const double k_turb = model.k_turb[i];
+        const double q1 = dof_values[data.lid_q1[i]];
+        const double poiseuille_resistance = poiseuille_factor * ref_length / (ref_area * ref_area);
+        const double R = poiseuille_resistance * k_turb;
 
         double dk_dq1;
-        if (model.k_turb[i] > 1.0)
+        if (k_turb > 1.0)
         {
-          dk_dq1 =
-              model.turbulence_factor_gamma[i] *
-              std::sqrt(data.air_properties.density /
-                        (M_PI * data.air_properties.dynamic_viscosity * data.ref_length[i])) *
-              1 / std::sqrt(std::abs(locally_relevant_dofs.local_values_as_span()[data.lid_q1[i]]));
+          dk_dq1 = model.turbulence_factor_gamma[i] *
+                   std::sqrt(turbulence_factor_base / ref_length) / std::sqrt(std::abs(q1));
         }
         else
         {
           dk_dq1 = 0.0;
         }
-        resistance_derivative[i] =
-            (poiseuille_resistance * dk_dq1) *
-                locally_relevant_dofs.local_values_as_span()[data.lid_q1[i]] +
-            R;
+        resistance_derivative[i] = (poiseuille_resistance * dk_dq1) * q1 + R;
       }
     }
 
