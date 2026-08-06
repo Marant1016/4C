@@ -13,7 +13,10 @@
 #include "4C_reduced_lung_tree_linearization.hpp"
 
 #include <array>
+#include <cmath>
+#include <limits>
 #include <span>
+#include <utility>
 
 FOUR_C_NAMESPACE_OPEN
 
@@ -36,6 +39,66 @@ namespace ReducedLung::TerminalUnits::Rheology
       return true;
     }
 
+    struct FourElementMaxwellResidualCoefficients
+    {
+      std::vector<double> flow_coeff;
+      std::vector<double> history_coeff;
+      double dt = std::numeric_limits<double>::quiet_NaN();
+    };
+
+    FourElementMaxwellResidualCoefficients make_four_element_maxwell_residual_coefficients(
+        const TerminalUnitData& data)
+    {
+      return FourElementMaxwellResidualCoefficients{
+          .flow_coeff = std::vector<double>(data.number_of_elements()),
+          .history_coeff = std::vector<double>(data.number_of_elements()),
+          .dt = std::numeric_limits<double>::quiet_NaN()};
+    }
+
+    void update_four_element_maxwell_residual_coefficients(
+        FourElementMaxwellResidualCoefficients& coefficients,
+        const FourElementMaxwell& four_element_maxwell_model, const TerminalUnitData& data,
+        double dt)
+    {
+      if (coefficients.dt == dt) return;
+
+      FOUR_C_ASSERT_ALWAYS(coefficients.flow_coeff.size() == data.number_of_elements() &&
+                               coefficients.history_coeff.size() == data.number_of_elements(),
+          "Four-element Maxwell residual coefficient buffers must have {} entries.",
+          data.number_of_elements());
+
+      for (size_t i = 0; i < data.number_of_elements(); i++)
+      {
+        const double denominator = four_element_maxwell_model.elasticity_E_m[i] * dt +
+                                   four_element_maxwell_model.viscosity_eta_m[i];
+        const double branch_viscosity = four_element_maxwell_model.elasticity_E_m[i] * dt *
+                                        four_element_maxwell_model.viscosity_eta_m[i] / denominator;
+        coefficients.flow_coeff[i] =
+            four_element_maxwell_model.viscosity_eta[i] + branch_viscosity;
+        coefficients.history_coeff[i] = four_element_maxwell_model.viscosity_eta_m[i] / denominator;
+      }
+      coefficients.dt = dt;
+    }
+
+    double evaluate_linear_elastic_pressure(const LinearElasticity& linear_elastic_model,
+        const TerminalUnitData& data, std::span<const double> dof_values, double dt, size_t i)
+    {
+      const double q = dof_values[data.lid_q[i]];
+      return linear_elastic_model.elasticity_E[i] *
+             ((data.volume_v[i] + dt * q) * data.reference_volume_context[i].inv_v0_eff - 1.0);
+    }
+
+    double evaluate_ogden_elastic_pressure(const OgdenHyperelasticity& ogden_hyperelastic_model,
+        const TerminalUnitData& data, std::span<const double> dof_values, double dt, size_t i)
+    {
+      const double q = dof_values[data.lid_q[i]];
+      const double v0_over_vi =
+          data.reference_volume_context[i].v0_eff / (data.volume_v[i] + dt * q);
+      return ogden_hyperelastic_model.bulk_modulus_kappa[i] /
+             ogden_hyperelastic_model.nonlinear_stiffening_beta[i] * v0_over_vi *
+             (1.0 - std::pow(v0_over_vi, ogden_hyperelastic_model.nonlinear_stiffening_beta[i]));
+    }
+
     void evaluate_linear_kelvin_voigt_zero_viscosity_residual(Core::LinAlg::Vector<double>& target,
         LinearElasticity& linear_elastic_model, const TerminalUnitData& data,
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
@@ -47,13 +110,14 @@ namespace ReducedLung::TerminalUnits::Rheology
       const auto& lid_p2 = data.lid_p2;
       const auto& lid_q = data.lid_q;
       const auto& volume = data.volume_v;
-      const auto& reference_volume = data.reference_volume_v0;
+      const auto& reference_volume = data.reference_volume_context;
       const auto& elasticity = linear_elastic_model.elasticity_E;
       auto& elastic_pressure = linear_elastic_model.elastic_pressure_p_el;
       for (size_t i = 0; i < data.number_of_elements(); i++)
       {
         const double pressure =
-            elasticity[i] * ((volume[i] + dt * dof_values[lid_q[i]]) / reference_volume[i] - 1.0);
+            elasticity[i] *
+            ((volume[i] + dt * dof_values[lid_q[i]]) * reference_volume[i].inv_v0_eff - 1.0);
         elastic_pressure[i] = pressure;
         residual_values[static_cast<std::size_t>(local_row_id[i])] =
             dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - pressure;
@@ -72,18 +136,129 @@ namespace ReducedLung::TerminalUnits::Rheology
       const auto& lid_p2 = data.lid_p2;
       const auto& lid_q = data.lid_q;
       const auto& volume = data.volume_v;
-      const auto& reference_volume = data.reference_volume_v0;
+      const auto& reference_volume = data.reference_volume_context;
       const auto& elasticity = linear_elastic_model.elasticity_E;
       auto& elastic_pressure = linear_elastic_model.elastic_pressure_p_el;
       const auto& viscosity = kelvin_voigt_model.viscosity_eta;
       for (size_t i = 0; i < data.number_of_elements(); i++)
       {
         const double q = dof_values[lid_q[i]];
-        const double pressure = elasticity[i] * ((volume[i] + dt * q) / reference_volume[i] - 1.0);
+        const double pressure =
+            elasticity[i] * ((volume[i] + dt * q) * reference_volume[i].inv_v0_eff - 1.0);
         elastic_pressure[i] = pressure;
         residual_values[static_cast<std::size_t>(local_row_id[i])] =
             dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - pressure -
-            viscosity[i] * q / reference_volume[i];
+            viscosity[i] * q * reference_volume[i].inv_v0_eff;
+      }
+    }
+
+    void evaluate_linear_four_element_maxwell_residual(Core::LinAlg::Vector<double>& target,
+        const FourElementMaxwell& four_element_maxwell_model,
+        FourElementMaxwellResidualCoefficients& coefficients,
+        LinearElasticity& linear_elastic_model, TerminalUnitData& data,
+        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+    {
+      update_four_element_maxwell_residual_coefficients(
+          coefficients, four_element_maxwell_model, data, dt);
+
+      auto residual_values = target.local_values_as_span();
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const auto& local_row_id = data.local_row_id;
+      const auto& lid_p1 = data.lid_p1;
+      const auto& lid_p2 = data.lid_p2;
+      const auto& lid_q = data.lid_q;
+      auto& elastic_pressure = linear_elastic_model.elastic_pressure_p_el;
+      const auto& maxwell_pressure = four_element_maxwell_model.maxwell_pressure_p_m;
+      const auto& flow_coeff = coefficients.flow_coeff;
+      const auto& history_coeff = coefficients.history_coeff;
+      for (size_t i = 0; i < data.number_of_elements(); i++)
+      {
+        const double q = dof_values[lid_q[i]];
+        const double pressure =
+            evaluate_linear_elastic_pressure(linear_elastic_model, data, dof_values, dt, i);
+        elastic_pressure[i] = pressure;
+        residual_values[static_cast<std::size_t>(local_row_id[i])] =
+            dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - pressure -
+            flow_coeff[i] * data.reference_volume_context[i].inv_v0_eff * q -
+            history_coeff[i] * maxwell_pressure[i];
+      }
+    }
+
+    void evaluate_ogden_kelvin_voigt_zero_viscosity_residual(Core::LinAlg::Vector<double>& target,
+        OgdenHyperelasticity& ogden_hyperelastic_model, TerminalUnitData& data,
+        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+    {
+      auto residual_values = target.local_values_as_span();
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const auto& local_row_id = data.local_row_id;
+      const auto& lid_p1 = data.lid_p1;
+      const auto& lid_p2 = data.lid_p2;
+      auto& elastic_pressure = ogden_hyperelastic_model.elastic_pressure_p_el;
+      for (size_t i = 0; i < data.number_of_elements(); i++)
+      {
+        const double pressure =
+            evaluate_ogden_elastic_pressure(ogden_hyperelastic_model, data, dof_values, dt, i);
+        elastic_pressure[i] = pressure;
+        residual_values[static_cast<std::size_t>(local_row_id[i])] =
+            dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - pressure;
+      }
+    }
+
+    void evaluate_ogden_kelvin_voigt_residual(Core::LinAlg::Vector<double>& target,
+        const KelvinVoigt& kelvin_voigt_model, OgdenHyperelasticity& ogden_hyperelastic_model,
+        TerminalUnitData& data, const Core::LinAlg::Vector<double>& locally_relevant_dofs,
+        double dt)
+    {
+      auto residual_values = target.local_values_as_span();
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const auto& local_row_id = data.local_row_id;
+      const auto& lid_p1 = data.lid_p1;
+      const auto& lid_p2 = data.lid_p2;
+      const auto& lid_q = data.lid_q;
+      const auto& reference_volume = data.reference_volume_context;
+      const auto& viscosity = kelvin_voigt_model.viscosity_eta;
+      auto& elastic_pressure = ogden_hyperelastic_model.elastic_pressure_p_el;
+      for (size_t i = 0; i < data.number_of_elements(); i++)
+      {
+        const double q = dof_values[lid_q[i]];
+        const double pressure =
+            evaluate_ogden_elastic_pressure(ogden_hyperelastic_model, data, dof_values, dt, i);
+        elastic_pressure[i] = pressure;
+        residual_values[static_cast<std::size_t>(local_row_id[i])] =
+            dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - pressure -
+            viscosity[i] * q * reference_volume[i].inv_v0_eff;
+      }
+    }
+
+    void evaluate_ogden_four_element_maxwell_residual(Core::LinAlg::Vector<double>& target,
+        const FourElementMaxwell& four_element_maxwell_model,
+        FourElementMaxwellResidualCoefficients& coefficients,
+        OgdenHyperelasticity& ogden_hyperelastic_model, TerminalUnitData& data,
+        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+    {
+      update_four_element_maxwell_residual_coefficients(
+          coefficients, four_element_maxwell_model, data, dt);
+
+      auto residual_values = target.local_values_as_span();
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const auto& local_row_id = data.local_row_id;
+      const auto& lid_p1 = data.lid_p1;
+      const auto& lid_p2 = data.lid_p2;
+      const auto& lid_q = data.lid_q;
+      auto& elastic_pressure = ogden_hyperelastic_model.elastic_pressure_p_el;
+      const auto& maxwell_pressure = four_element_maxwell_model.maxwell_pressure_p_m;
+      const auto& flow_coeff = coefficients.flow_coeff;
+      const auto& history_coeff = coefficients.history_coeff;
+      for (size_t i = 0; i < data.number_of_elements(); i++)
+      {
+        const double q = dof_values[lid_q[i]];
+        const double pressure =
+            evaluate_ogden_elastic_pressure(ogden_hyperelastic_model, data, dof_values, dt, i);
+        elastic_pressure[i] = pressure;
+        residual_values[static_cast<std::size_t>(local_row_id[i])] =
+            dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - pressure -
+            flow_coeff[i] * data.reference_volume_context[i].inv_v0_eff * q -
+            history_coeff[i] * maxwell_pressure[i];
       }
     }
 
@@ -326,7 +501,8 @@ namespace ReducedLung::TerminalUnits::Rheology
    * Resolve variant-based residual evaluator.
    */
   ResidualEvaluator make_residual_evaluator(RheologicalModel& rheological_model,
-      ElasticityModel& elasticity_model, Elasticity::ElasticPressureEvaluator pressure_evaluator)
+      ElasticityModel& elasticity_model, Elasticity::ElasticPressureEvaluator pressure_evaluator,
+      const TerminalUnitData& model_data)
   {
     return std::visit(
         [&](auto& model) -> ResidualEvaluator
@@ -357,6 +533,30 @@ namespace ReducedLung::TerminalUnits::Rheology
               };
             }
 
+            if (auto* ogden_hyperelastic_model =
+                    std::get_if<OgdenHyperelasticity>(&elasticity_model);
+                ogden_hyperelastic_model != nullptr)
+            {
+              if (all_viscosity_zero(model))
+              {
+                return [ogden_hyperelastic_model](TerminalUnitData& data,
+                           Core::LinAlg::Vector<double>& target,
+                           const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+                {
+                  evaluate_ogden_kelvin_voigt_zero_viscosity_residual(
+                      target, *ogden_hyperelastic_model, data, locally_relevant_dofs, dt);
+                };
+              }
+
+              return [&model, ogden_hyperelastic_model](TerminalUnitData& data,
+                         Core::LinAlg::Vector<double>& target,
+                         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+              {
+                evaluate_ogden_kelvin_voigt_residual(
+                    target, model, *ogden_hyperelastic_model, data, locally_relevant_dofs, dt);
+              };
+            }
+
             return [&model, pressure_evaluator](TerminalUnitData& data,
                        Core::LinAlg::Vector<double>& target,
                        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
@@ -367,6 +567,35 @@ namespace ReducedLung::TerminalUnits::Rheology
           }
           else if constexpr (std::is_same_v<ModelType, FourElementMaxwell>)
           {
+            if (auto* linear_elastic_model = std::get_if<LinearElasticity>(&elasticity_model);
+                linear_elastic_model != nullptr)
+            {
+              return
+                  [&model, linear_elastic_model,
+                      coefficients = make_four_element_maxwell_residual_coefficients(model_data)](
+                      TerminalUnitData& data, Core::LinAlg::Vector<double>& target,
+                      const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt) mutable
+              {
+                evaluate_linear_four_element_maxwell_residual(target, model, coefficients,
+                    *linear_elastic_model, data, locally_relevant_dofs, dt);
+              };
+            }
+
+            if (auto* ogden_hyperelastic_model =
+                    std::get_if<OgdenHyperelasticity>(&elasticity_model);
+                ogden_hyperelastic_model != nullptr)
+            {
+              return
+                  [&model, ogden_hyperelastic_model,
+                      coefficients = make_four_element_maxwell_residual_coefficients(model_data)](
+                      TerminalUnitData& data, Core::LinAlg::Vector<double>& target,
+                      const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt) mutable
+              {
+                evaluate_ogden_four_element_maxwell_residual(target, model, coefficients,
+                    *ogden_hyperelastic_model, data, locally_relevant_dofs, dt);
+              };
+            }
+
             return [&model, pressure_evaluator](TerminalUnitData& data,
                        Core::LinAlg::Vector<double>& target,
                        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)

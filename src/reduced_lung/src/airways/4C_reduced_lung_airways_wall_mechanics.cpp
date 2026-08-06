@@ -76,6 +76,12 @@ namespace ReducedLung::Airways::WallMechanics
         }
       }
     }
+
+    double evaluate_poiseuille_resistance(const AirwayData& data, double area, size_t i)
+    {
+      return 8.0 * std::numbers::pi * data.air_properties.dynamic_viscosity * data.ref_length[i] /
+             (area * area);
+    }
   }  // namespace
 
   void evaluate_rigid_linear_no_inertia_residual(Core::LinAlg::Vector<double>& target,
@@ -119,6 +125,48 @@ namespace ReducedLung::Airways::WallMechanics
     }
   }
 
+  void evaluate_rigid_nonlinear_no_inertia_residual(Core::LinAlg::Vector<double>& target,
+      const NonLinearResistive& flow_model, const AirwayData& data,
+      const Core::LinAlg::Vector<double>& locally_relevant_dofs,
+      std::span<const double> poiseuille_resistance)
+  {
+    auto residual_values = target.local_values_as_span();
+    const auto dof_values = locally_relevant_dofs.local_values_as_span();
+    const auto& local_row_id = data.local_row_id;
+    const auto& lid_p1 = data.lid_p1;
+    const auto& lid_p2 = data.lid_p2;
+    const auto& lid_q1 = data.lid_q1;
+    const auto& k_turb = flow_model.k_turb;
+    for (size_t i = 0; i < data.number_of_elements(); i++)
+    {
+      const double q1 = dof_values[lid_q1[i]];
+      residual_values[static_cast<std::size_t>(local_row_id[i])] =
+          dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - poiseuille_resistance[i] * k_turb[i] * q1;
+    }
+  }
+
+  void evaluate_rigid_nonlinear_residual(Core::LinAlg::Vector<double>& target,
+      const NonLinearResistive& flow_model, const AirwayData& data,
+      const Core::LinAlg::Vector<double>& locally_relevant_dofs,
+      std::span<const double> poiseuille_resistance, std::span<const double> inertia, double dt)
+  {
+    auto residual_values = target.local_values_as_span();
+    const auto dof_values = locally_relevant_dofs.local_values_as_span();
+    const auto& local_row_id = data.local_row_id;
+    const auto& lid_p1 = data.lid_p1;
+    const auto& lid_p2 = data.lid_p2;
+    const auto& lid_q1 = data.lid_q1;
+    const auto& q1_n = data.q1_n;
+    const auto& k_turb = flow_model.k_turb;
+    for (size_t i = 0; i < data.number_of_elements(); i++)
+    {
+      const double q1 = dof_values[lid_q1[i]];
+      residual_values[static_cast<std::size_t>(local_row_id[i])] =
+          dof_values[lid_p1[i]] - dof_values[lid_p2[i]] -
+          poiseuille_resistance[i] * k_turb[i] * q1 - inertia[i] / dt * (q1 - q1_n[i]);
+    }
+  }
+
   void evaluate_kelvin_voigt_wall_residual(Core::LinAlg::Vector<double>& target,
       const KelvinVoigtWall& kelvin_voigt_wall_model, const AirwayData& data,
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, std::span<const double> resistance,
@@ -153,6 +201,105 @@ namespace ReducedLung::Airways::WallMechanics
                          2 * viscous_resistance[i] * (q1_n[i] - q2_n[i]));
       residual_values[static_cast<std::size_t>(momentum_row)] = res_momentum;
       residual_values[static_cast<std::size_t>(mass_row)] = res_mass;
+    }
+  }
+
+  void evaluate_kelvin_voigt_linear_residual(Core::LinAlg::Vector<double>& target,
+      const KelvinVoigtWall& kelvin_voigt_wall_model, const LinearResistive& flow_model,
+      const AirwayData& data, const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt,
+      bool compute_inertia)
+  {
+    auto residual_values = target.local_values_as_span();
+    const auto dof_values = locally_relevant_dofs.local_values_as_span();
+    const auto& local_row_id = data.local_row_id;
+    const auto& lid_p1 = data.lid_p1;
+    const auto& lid_p2 = data.lid_p2;
+    const auto& lid_q1 = data.lid_q1;
+    const auto& lid_q2 = data.lid_q2;
+    const auto& p1_n = data.p1_n;
+    const auto& p2_n = data.p2_n;
+    const auto& q1_n = data.q1_n;
+    const auto& q2_n = data.q2_n;
+    const auto& area = kelvin_voigt_wall_model.area;
+    const auto& viscous_resistance = kelvin_voigt_wall_model.viscous_resistance_Rvisc;
+    const auto& compliance = kelvin_voigt_wall_model.compliance_C;
+    const auto& has_inertia = flow_model.has_inertia;
+    const double density = data.air_properties.density;
+
+    for (size_t i = 0; i < data.number_of_elements(); i++)
+    {
+      const int momentum_row = local_row_id[i];
+      const int mass_row = local_row_id[i] + 1;
+      const double p1 = dof_values[lid_p1[i]];
+      const double p2 = dof_values[lid_p2[i]];
+      const double q1 = dof_values[lid_q1[i]];
+      const double q2 = dof_values[lid_q2[i]];
+      const double resistance = evaluate_poiseuille_resistance(data, area[i], i);
+      double inertia_over_2dt = 0.0;
+      if (compute_inertia && i < has_inertia.size() && has_inertia[i])
+      {
+        inertia_over_2dt = density * data.ref_length[i] / area[i] / (2.0 * dt);
+      }
+
+      residual_values[static_cast<std::size_t>(momentum_row)] =
+          p1 - p2 - (0.5 * resistance + inertia_over_2dt) * (q1 + q2) +
+          inertia_over_2dt * (q1_n[i] + q2_n[i]);
+      residual_values[static_cast<std::size_t>(mass_row)] =
+          p1 + p2 - p1_n[i] - p2_n[i] -
+          2.0 * (viscous_resistance[i] + dt / compliance[i]) * (q1 - q2) +
+          2.0 * viscous_resistance[i] * (q1_n[i] - q2_n[i]);
+    }
+  }
+
+  void evaluate_kelvin_voigt_nonlinear_residual(Core::LinAlg::Vector<double>& target,
+      const KelvinVoigtWall& kelvin_voigt_wall_model, const NonLinearResistive& flow_model,
+      const AirwayData& data, const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt,
+      bool compute_inertia)
+  {
+    auto residual_values = target.local_values_as_span();
+    const auto dof_values = locally_relevant_dofs.local_values_as_span();
+    const auto& local_row_id = data.local_row_id;
+    const auto& lid_p1 = data.lid_p1;
+    const auto& lid_p2 = data.lid_p2;
+    const auto& lid_q1 = data.lid_q1;
+    const auto& lid_q2 = data.lid_q2;
+    const auto& p1_n = data.p1_n;
+    const auto& p2_n = data.p2_n;
+    const auto& q1_n = data.q1_n;
+    const auto& q2_n = data.q2_n;
+    const auto& area = kelvin_voigt_wall_model.area;
+    const auto& viscous_resistance = kelvin_voigt_wall_model.viscous_resistance_Rvisc;
+    const auto& compliance = kelvin_voigt_wall_model.compliance_C;
+    const auto& has_inertia = flow_model.has_inertia;
+    const auto& k_turb = flow_model.k_turb;
+    const double density = data.air_properties.density;
+
+    for (size_t i = 0; i < data.number_of_elements(); i++)
+    {
+      const int momentum_row = local_row_id[i];
+      const int mass_row = local_row_id[i] + 1;
+      const double p1 = dof_values[lid_p1[i]];
+      const double p2 = dof_values[lid_p2[i]];
+      const double q1 = dof_values[lid_q1[i]];
+      const double q2 = dof_values[lid_q2[i]];
+      const double area_i = area[i];
+      const double area_squared = area_i * area_i;
+      const double alpha = 4.0 * k_turb[i] / (4.0 * k_turb[i] - 1.0);
+      const double resistance = evaluate_poiseuille_resistance(data, area_i, i) * k_turb[i] +
+                                2.0 * density * alpha / area_squared * (q2 - q1);
+      double inertia_over_2dt = 0.0;
+      if (compute_inertia && i < has_inertia.size() && has_inertia[i])
+      {
+        inertia_over_2dt = density * data.ref_length[i] / area_i / (2.0 * dt);
+      }
+
+      residual_values[static_cast<std::size_t>(momentum_row)] =
+          p1 - p2 - (0.5 * resistance + inertia_over_2dt) * (q1 + q2) +
+          inertia_over_2dt * (q1_n[i] + q2_n[i]);
+      residual_values[static_cast<std::size_t>(mass_row)] =
+          p1 + p2 - p1_n[i] - p2_n[i] -
+          2.0 * (viscous_resistance[i] + dt / compliance[i]) * (q1 - q2) +
+          2.0 * viscous_resistance[i] * (q1_n[i] - q2_n[i]);
     }
   }
 
@@ -360,6 +507,38 @@ namespace ReducedLung::Airways::WallMechanics
               };
             }
 
+            if (const auto* nonlinear_flow_model = std::get_if<NonLinearResistive>(&flow_model))
+            {
+              std::vector<double> poiseuille_resistance;
+              precompute_rigid_linear_resistance(data, poiseuille_resistance);
+
+              if (!has_inertia_enabled(nonlinear_flow_model->has_inertia))
+              {
+                return
+                    [nonlinear_flow_model,
+                        poiseuille_resistance = std::move(poiseuille_resistance)](
+                        const AirwayData& airway_data, Core::LinAlg::Vector<double>& target_vector,
+                        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double /*dt*/)
+                {
+                  evaluate_rigid_nonlinear_no_inertia_residual(target_vector, *nonlinear_flow_model,
+                      airway_data, locally_relevant_dofs, as_const_span(poiseuille_resistance));
+                };
+              }
+
+              std::vector<double> inertia;
+              precompute_rigid_inertia(data, nonlinear_flow_model->has_inertia, inertia);
+              return
+                  [nonlinear_flow_model, poiseuille_resistance = std::move(poiseuille_resistance),
+                      inertia = std::move(inertia)](const AirwayData& airway_data,
+                      Core::LinAlg::Vector<double>& target_vector,
+                      const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+              {
+                evaluate_rigid_nonlinear_residual(target_vector, *nonlinear_flow_model, airway_data,
+                    locally_relevant_dofs, as_const_span(poiseuille_resistance),
+                    as_const_span(inertia), dt);
+              };
+            }
+
             auto resistance_evaluator =
                 FlowResistance::make_flow_resistance_evaluator_rigid(flow_model);
             auto inertia_evaluator = FlowResistance::make_inertia_evaluator(flow_model);
@@ -379,6 +558,30 @@ namespace ReducedLung::Airways::WallMechanics
           }
           else if constexpr (std::is_same_v<WallModelType, KelvinVoigtWall>)
           {
+            if (const auto* linear_flow_model = std::get_if<LinearResistive>(&flow_model))
+            {
+              const bool compute_inertia = has_inertia_enabled(linear_flow_model->has_inertia);
+              return [linear_flow_model, &wall_model_data, compute_inertia](
+                         const AirwayData& airway_data, Core::LinAlg::Vector<double>& target_vector,
+                         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+              {
+                evaluate_kelvin_voigt_linear_residual(target_vector, wall_model_data,
+                    *linear_flow_model, airway_data, locally_relevant_dofs, dt, compute_inertia);
+              };
+            }
+
+            if (const auto* nonlinear_flow_model = std::get_if<NonLinearResistive>(&flow_model))
+            {
+              const bool compute_inertia = has_inertia_enabled(nonlinear_flow_model->has_inertia);
+              return [nonlinear_flow_model, &wall_model_data, compute_inertia](
+                         const AirwayData& airway_data, Core::LinAlg::Vector<double>& target_vector,
+                         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+              {
+                evaluate_kelvin_voigt_nonlinear_residual(target_vector, wall_model_data,
+                    *nonlinear_flow_model, airway_data, locally_relevant_dofs, dt, compute_inertia);
+              };
+            }
+
             auto resistance_evaluator =
                 FlowResistance::make_flow_resistance_evaluator_kelvin_voigt(flow_model);
             auto inertia_evaluator = FlowResistance::make_inertia_evaluator(flow_model);
