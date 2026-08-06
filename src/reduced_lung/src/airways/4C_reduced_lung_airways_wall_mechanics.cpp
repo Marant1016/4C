@@ -61,6 +61,21 @@ namespace ReducedLung::Airways::WallMechanics
         resistance[i] = resistance_factor * data.ref_length[i] / (area_i * area_i);
       }
     }
+
+    void precompute_rigid_inertia(
+        const AirwayData& data, const std::vector<bool>& has_inertia, std::vector<double>& inertia)
+    {
+      inertia.resize(data.number_of_elements());
+      const double density = data.air_properties.density;
+      for (size_t i = 0; i < data.number_of_elements(); ++i)
+      {
+        inertia[i] = 0.0;
+        if (i < has_inertia.size() && has_inertia[i])
+        {
+          inertia[i] = density * data.ref_length[i] / data.ref_area[i];
+        }
+      }
+    }
   }  // namespace
 
   void evaluate_rigid_linear_no_inertia_residual(Core::LinAlg::Vector<double>& target,
@@ -318,18 +333,30 @@ namespace ReducedLung::Airways::WallMechanics
           using WallModelType = std::decay_t<decltype(wall_model_data)>;
           if constexpr (std::is_same_v<WallModelType, RigidWall>)
           {
-            if (const auto* linear_flow_model = std::get_if<LinearResistive>(&flow_model);
-                linear_flow_model != nullptr &&
-                !has_inertia_enabled(linear_flow_model->has_inertia))
+            if (const auto* linear_flow_model = std::get_if<LinearResistive>(&flow_model))
             {
               std::vector<double> resistance;
               precompute_rigid_linear_resistance(data, resistance);
-              return [resistance = std::move(resistance)](const AirwayData& airway_data,
-                         Core::LinAlg::Vector<double>& target_vector,
-                         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double /*dt*/)
+
+              if (!has_inertia_enabled(linear_flow_model->has_inertia))
               {
-                evaluate_rigid_linear_no_inertia_residual(
-                    target_vector, airway_data, locally_relevant_dofs, as_const_span(resistance));
+                return [resistance = std::move(resistance)](const AirwayData& airway_data,
+                           Core::LinAlg::Vector<double>& target_vector,
+                           const Core::LinAlg::Vector<double>& locally_relevant_dofs, double /*dt*/)
+                {
+                  evaluate_rigid_linear_no_inertia_residual(
+                      target_vector, airway_data, locally_relevant_dofs, as_const_span(resistance));
+                };
+              }
+
+              std::vector<double> inertia;
+              precompute_rigid_inertia(data, linear_flow_model->has_inertia, inertia);
+              return [resistance = std::move(resistance), inertia = std::move(inertia)](
+                         const AirwayData& airway_data, Core::LinAlg::Vector<double>& target_vector,
+                         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+              {
+                evaluate_rigid_wall_residual(target_vector, airway_data, locally_relevant_dofs,
+                    as_const_span(resistance), as_const_span(inertia), dt);
               };
             }
 

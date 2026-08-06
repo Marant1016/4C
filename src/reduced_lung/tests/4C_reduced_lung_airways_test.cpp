@@ -18,6 +18,7 @@
 // needed for export_to
 #include "4C_linalg_utils_sparse_algebra_manipulation.hpp"
 
+#include <span>
 #include <unordered_map>
 
 
@@ -74,6 +75,75 @@ namespace
         WallMechanics::make_residual_evaluator(model.wall_model, model.flow_model, model.data);
     model.jacobian_evaluator =
         WallMechanics::make_jacobian_evaluator(model.wall_model, model.flow_model);
+  }
+
+  TEST(AirwayTests, RigidLinearInertiaResidualMatchesGenericPath)
+  {
+    AirwayContainer airways;
+    AirwayModel model;
+
+    model.data.global_element_id = {0, 1, 2};
+    model.data.local_element_id = {0, 1, 2};
+    model.data.local_row_id = {0, 1, 2};
+    model.data.gid_p1 = {0, 1, 2};
+    model.data.gid_p2 = {3, 4, 5};
+    model.data.gid_q1 = {6, 7, 8};
+    model.data.gid_q2 = {6, 7, 8};
+    model.data.lid_p1 = {0, 1, 2};
+    model.data.lid_p2 = {3, 4, 5};
+    model.data.lid_q1 = {6, 7, 8};
+    model.data.lid_q2 = {6, 7, 8};
+    model.data.ref_length = {1.0, 1.3, 0.7};
+    model.data.ref_area = {0.5, 0.4, 0.3};
+    model.data.n_state_equations = 1;
+    model.data.air_properties.dynamic_viscosity = 1.79105e-05;
+    model.data.air_properties.density = 1.176e-06;
+    model.data.q1_n = {1.0, -0.5, 0.2};
+    model.data.q2_n = {0.0, 0.0, 0.0};
+    model.flow_model = LinearResistive{.has_inertia = std::vector<bool>{true, false, true}};
+    model.wall_model = RigidWall{};
+    airways.models.push_back(model);
+
+    const auto dof_map =
+        create_domain_map(MPI_COMM_WORLD, airways, TerminalUnits::TerminalUnitContainer{});
+    const auto row_map =
+        create_row_map(MPI_COMM_WORLD, airways, TerminalUnits::TerminalUnitContainer{}, {}, {}, {});
+    const auto col_map =
+        create_column_map(MPI_COMM_WORLD, airways, TerminalUnits::TerminalUnitContainer{},
+            {{0, 3}, {1, 3}, {2, 3}}, {{0, 0}, {1, 3}, {2, 6}}, {}, {}, {});
+
+    Vector<double> dofs(dof_map, true);
+    Vector<double> locally_relevant_dofs(col_map, true);
+    dofs.replace_local_values(9,
+        std::array<double, 9>{2.0, 2.5, 3.0, 1.2, 1.1, 0.9, 10.0, -3.0, 4.5}.data(),
+        std::array<int, 9>{0, 1, 2, 3, 4, 5, 6, 7, 8}.data());
+    export_to(dofs, locally_relevant_dofs);
+
+    assign_model_evaluators(model);
+
+    const double dt = 0.2;
+    Vector<double> optimized_residual(row_map, true);
+    model.residual_evaluator(model.data, optimized_residual, locally_relevant_dofs, dt);
+
+    auto resistance_evaluator =
+        FlowResistance::make_flow_resistance_evaluator_rigid(model.flow_model);
+    auto inertia_evaluator = FlowResistance::make_inertia_evaluator(model.flow_model);
+    std::vector<double> resistance(model.data.number_of_elements());
+    std::vector<double> inertia(model.data.number_of_elements());
+    resistance_evaluator(model.data, locally_relevant_dofs, model.data.ref_area,
+        std::span<double>(resistance.data(), resistance.size()));
+    inertia_evaluator(
+        model.data, model.data.ref_area, std::span<double>(inertia.data(), inertia.size()));
+
+    const auto residual_values = optimized_residual.local_values_as_span();
+    const auto dof_values = locally_relevant_dofs.local_values_as_span();
+    for (size_t i = 0; i < model.data.number_of_elements(); ++i)
+    {
+      const double q1 = dof_values[model.data.lid_q1[i]];
+      const double expected = dof_values[model.data.lid_p1[i]] - dof_values[model.data.lid_p2[i]] -
+                              resistance[i] * q1 - inertia[i] / dt * (q1 - model.data.q1_n[i]);
+      EXPECT_NEAR(residual_values[model.data.local_row_id[i]], expected, 1e-14);
+    }
   }
 
   TEST(AirwayTests, JacobianVsFiniteDifferenceRigidWall)
