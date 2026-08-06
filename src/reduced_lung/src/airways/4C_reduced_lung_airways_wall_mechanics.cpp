@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cmath>
+#include <numbers>
 #include <span>
 #include <type_traits>
 #include <vector>
@@ -38,7 +39,49 @@ namespace ReducedLung::Airways::WallMechanics
     {
       return std::span<const double>(values.data(), values.size());
     }
+
+    bool has_inertia_enabled(const std::vector<bool>& has_inertia)
+    {
+      for (const bool enabled : has_inertia)
+      {
+        if (enabled) return true;
+      }
+      return false;
+    }
+
+    void precompute_rigid_linear_resistance(const AirwayData& data, std::vector<double>& resistance)
+    {
+      resistance.resize(data.number_of_elements());
+      const double resistance_factor =
+          8.0 * std::numbers::pi * data.air_properties.dynamic_viscosity;
+      for (size_t i = 0; i < data.number_of_elements(); ++i)
+      {
+        const double area_i = data.ref_area[i];
+        resistance[i] = resistance_factor * data.ref_length[i] / (area_i * area_i);
+      }
+    }
   }  // namespace
+
+  void evaluate_rigid_linear_no_inertia_residual(Core::LinAlg::Vector<double>& target,
+      const AirwayData& data, const Core::LinAlg::Vector<double>& locally_relevant_dofs,
+      std::span<const double> resistance)
+  {
+    FOUR_C_ASSERT_ALWAYS(resistance.size() == data.number_of_elements(),
+        "Rigid linear airway residual resistance buffer has {} entries but expected {}.",
+        resistance.size(), data.number_of_elements());
+
+    auto residual_values = target.local_values_as_span();
+    const auto dof_values = locally_relevant_dofs.local_values_as_span();
+    const auto& local_row_id = data.local_row_id;
+    const auto& lid_p1 = data.lid_p1;
+    const auto& lid_p2 = data.lid_p2;
+    const auto& lid_q1 = data.lid_q1;
+    for (size_t i = 0; i < data.number_of_elements(); i++)
+    {
+      residual_values[static_cast<std::size_t>(local_row_id[i])] =
+          dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - resistance[i] * dof_values[lid_q1[i]];
+    }
+  }
 
   void evaluate_rigid_wall_residual(Core::LinAlg::Vector<double>& target, const AirwayData& data,
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, std::span<const double> resistance,
@@ -273,6 +316,24 @@ namespace ReducedLung::Airways::WallMechanics
           using WallModelType = std::decay_t<decltype(wall_model_data)>;
           if constexpr (std::is_same_v<WallModelType, RigidWall>)
           {
+            if (const auto* linear_flow_model = std::get_if<LinearResistive>(&flow_model);
+                linear_flow_model != nullptr &&
+                !has_inertia_enabled(linear_flow_model->has_inertia))
+            {
+              return [resistance = std::vector<double>{}](const AirwayData& airway_data,
+                         Core::LinAlg::Vector<double>& target_vector,
+                         const Core::LinAlg::Vector<double>& locally_relevant_dofs,
+                         double /*dt*/) mutable
+              {
+                if (resistance.size() != airway_data.number_of_elements())
+                {
+                  precompute_rigid_linear_resistance(airway_data, resistance);
+                }
+                evaluate_rigid_linear_no_inertia_residual(
+                    target_vector, airway_data, locally_relevant_dofs, as_const_span(resistance));
+              };
+            }
+
             auto resistance_evaluator =
                 FlowResistance::make_flow_resistance_evaluator_rigid(flow_model);
             auto inertia_evaluator = FlowResistance::make_inertia_evaluator(flow_model);
