@@ -276,10 +276,32 @@ namespace
     return params;
   }
 
+  ReducedLungParameters make_nonlinear_kelvin_voigt_airway_parameters(double dt)
+  {
+    auto params = make_serial_airway_parameters(dt);
+    set_airway_model(params, {{1, 1.0}, {2, 0.9}, {3, 0.8}}, ResistanceType::NonLinear,
+        WallModelType::KelvinVoigt);
+    return params;
+  }
+
+  ReducedLungParameters make_ogden_terminal_unit_parameters(double dt)
+  {
+    auto params = make_single_terminal_unit_parameters(dt);
+    set_terminal_unit_model(params, RheologyType::KelvinVoigt, ElasticityType::Ogden);
+    return params;
+  }
+
   ReducedLungParameters make_four_element_maxwell_terminal_unit_parameters(double dt)
   {
     auto params = make_single_terminal_unit_parameters(dt);
     set_terminal_unit_model(params, RheologyType::FourElementMaxwell, ElasticityType::Linear);
+    return params;
+  }
+
+  ReducedLungParameters make_four_element_maxwell_ogden_terminal_unit_parameters(double dt)
+  {
+    auto params = make_single_terminal_unit_parameters(dt);
+    set_terminal_unit_model(params, RheologyType::FourElementMaxwell, ElasticityType::Ogden);
     return params;
   }
 
@@ -1261,6 +1283,46 @@ namespace
     compare_direct_and_generic_structured_coefficients(
         "tree_linear_direct_structured_mixed_terminal_units",
         make_mixed_airway_terminal_unit_parameters(0.1), true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests,
+      DirectStructuredAssemblyNonlinearRigidAirwaysMatchesGenericPath)
+  {
+    compare_direct_and_generic_structured_coefficients(
+        "tree_linear_direct_structured_nonlinear_rigid_airways",
+        make_nonlinear_airway_parameters(0.1), true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests,
+      DirectStructuredAssemblyNonlinearKelvinVoigtAirwaysMatchesGenericPath)
+  {
+    compare_direct_and_generic_structured_coefficients(
+        "tree_linear_direct_structured_nonlinear_kelvin_voigt_airways",
+        make_nonlinear_kelvin_voigt_airway_parameters(0.1), true);
+  }
+
+  TEST(
+      ReducedLungTreeLinearSolverTests, DirectStructuredAssemblyOgdenTerminalUnitMatchesGenericPath)
+  {
+    compare_direct_and_generic_structured_coefficients(
+        "tree_linear_direct_structured_ogden_terminal_unit",
+        make_ogden_terminal_unit_parameters(0.1), true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests,
+      DirectStructuredAssemblyFourElementMaxwellTerminalUnitMatchesGenericPath)
+  {
+    compare_direct_and_generic_structured_coefficients(
+        "tree_linear_direct_structured_four_element_maxwell_terminal_unit",
+        make_four_element_maxwell_terminal_unit_parameters(0.1), true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests,
+      DirectStructuredAssemblyFourElementMaxwellOgdenTerminalUnitMatchesGenericPath)
+  {
+    compare_direct_and_generic_structured_coefficients(
+        "tree_linear_direct_structured_four_element_maxwell_ogden_terminal_unit",
+        make_four_element_maxwell_ogden_terminal_unit_parameters(0.1), true);
   }
 
   TEST(ReducedLungTreeLinearSolverTests, ForcedBatchLargeRigidAirwaysMatchSparseSolver)
