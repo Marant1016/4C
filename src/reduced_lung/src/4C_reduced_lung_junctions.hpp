@@ -59,6 +59,12 @@ namespace ReducedLung
       std::vector<std::array<int, 4>> global_dof_ids;
       std::vector<std::array<int, 4>> local_dof_ids;
 
+      std::vector<int> first_row;
+      std::vector<int> p_out_parent_lid;
+      std::vector<int> p_in_child_lid;
+      std::vector<int> q_out_parent_lid;
+      std::vector<int> q_in_child_lid;
+
       [[nodiscard]] size_t size() const { return global_parent_element_id.size(); }
       void clear();
       void reserve(size_t count);
@@ -92,6 +98,14 @@ namespace ReducedLung
       std::vector<int> global_child_2_element_id;
       std::vector<std::array<int, 6>> global_dof_ids;
       std::vector<std::array<int, 6>> local_dof_ids;
+
+      std::vector<int> first_row;
+      std::vector<int> p_out_parent_lid;
+      std::vector<int> p_in_child_1_lid;
+      std::vector<int> p_in_child_2_lid;
+      std::vector<int> q_out_parent_lid;
+      std::vector<int> q_in_child_1_lid;
+      std::vector<int> q_in_child_2_lid;
 
       [[nodiscard]] size_t size() const { return global_parent_element_id.size(); }
       void clear();
