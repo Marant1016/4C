@@ -131,23 +131,23 @@ namespace ReducedLung::Airways::FlowResistance
           "Kelvin-Voigt q1 flow-resistance derivative");
       assert_output_size(resistance_derivative_q2, data.number_of_elements(),
           "Kelvin-Voigt q2 flow-resistance derivative");
+      const auto dof_values = dofs.local_values_as_span();
+      const double dynamic_viscosity = data.air_properties.dynamic_viscosity;
+      const double poiseuille_factor = 8.0 * std::numbers::pi * dynamic_viscosity;
+      const double poiseuille_area_derivative_factor = -16.0 * std::numbers::pi * dynamic_viscosity;
       for (size_t i = 0; i < data.number_of_elements(); i++)
       {
-        const double poiseuille_resistance = evaluate_poiseuille_resistance(data, area, i);
-        double dRp_da = -16 * M_PI * data.air_properties.dynamic_viscosity * data.ref_length[i] /
-                        (area[i] * area[i] * area[i]);
-        double da_dq1 = dt / data.ref_length[i];
-        double da_dq2 = -dt / data.ref_length[i];
-        resistance_derivative_q1[i] =
-            -0.5 * (dRp_da * da_dq1 *
-                           (dofs.local_values_as_span()[data.lid_q1[i]] +
-                               dofs.local_values_as_span()[data.lid_q2[i]]) +
-                       poiseuille_resistance);
-        resistance_derivative_q2[i] =
-            -0.5 * (dRp_da * da_dq2 *
-                           (dofs.local_values_as_span()[data.lid_q1[i]] +
-                               dofs.local_values_as_span()[data.lid_q2[i]]) +
-                       poiseuille_resistance);
+        const double ref_length = data.ref_length[i];
+        const double area_i = area[i];
+        const double area_squared = area_i * area_i;
+        const double area_cubed = area_squared * area_i;
+        const double poiseuille_resistance = poiseuille_factor * ref_length / area_squared;
+        const double dRp_da = poiseuille_area_derivative_factor * ref_length / area_cubed;
+        const double da_dq1 = dt / ref_length;
+        const double da_dq2 = -dt / ref_length;
+        const double q_sum = dof_values[data.lid_q1[i]] + dof_values[data.lid_q2[i]];
+        resistance_derivative_q1[i] = -0.5 * (dRp_da * da_dq1 * q_sum + poiseuille_resistance);
+        resistance_derivative_q2[i] = -0.5 * (dRp_da * da_dq2 * q_sum + poiseuille_resistance);
       }
     }
 
@@ -163,67 +163,61 @@ namespace ReducedLung::Airways::FlowResistance
           "Kelvin-Voigt q1 flow-resistance derivative");
       assert_output_size(resistance_derivative_q2, data.number_of_elements(),
           "Kelvin-Voigt q2 flow-resistance derivative");
+      const auto dof_values = dofs.local_values_as_span();
+      const double dynamic_viscosity = data.air_properties.dynamic_viscosity;
+      const double density = data.air_properties.density;
+      const double poiseuille_factor = 8.0 * std::numbers::pi * dynamic_viscosity;
+      const double poiseuille_area_derivative_factor = -16.0 * std::numbers::pi * dynamic_viscosity;
+      const double turbulence_factor_base = density / (2.0 * std::numbers::pi * dynamic_viscosity);
       for (size_t i = 0; i < data.number_of_elements(); i++)
       {
-        const double poiseuille_resistance = evaluate_poiseuille_resistance(data, area, i);
-        double dRp_da = -16 * M_PI * data.air_properties.dynamic_viscosity * data.ref_length[i] /
-                        (area[i] * area[i] * area[i]);
-        double da_dq1 = dt / data.ref_length[i];
-        double da_dq2 = -dt / data.ref_length[i];
+        const double ref_length = data.ref_length[i];
+        const double area_i = area[i];
+        const double area_squared = area_i * area_i;
+        const double area_cubed = area_squared * area_i;
+        const double k_turb = model.k_turb[i];
+        const double q1 = dof_values[data.lid_q1[i]];
+        const double q2 = dof_values[data.lid_q2[i]];
+        const double q_sum = q1 + q2;
+        const double q_difference = q2 - q1;
+        const double poiseuille_resistance = poiseuille_factor * ref_length / area_squared;
+        const double dRp_da = poiseuille_area_derivative_factor * ref_length / area_cubed;
+        const double da_dq1 = dt / ref_length;
+        const double da_dq2 = -dt / ref_length;
         double dk_dq1;
-        if (model.k_turb[i] > 1.0)
+        if (k_turb > 1.0)
         {
-          dk_dq1 =
-              model.turbulence_factor_gamma[i] *
-              std::sqrt(data.air_properties.density /
-                        (2 * M_PI * data.air_properties.dynamic_viscosity * data.ref_length[i])) *
-              (dofs.local_values_as_span()[data.lid_q1[i]] +
-                  dofs.local_values_as_span()[data.lid_q2[i]]) /
-              (std::abs(dofs.local_values_as_span()[data.lid_q1[i]] +
-                        dofs.local_values_as_span()[data.lid_q2[i]]) *
-                  std::sqrt(std::abs(dofs.local_values_as_span()[data.lid_q1[i]] +
-                                     dofs.local_values_as_span()[data.lid_q2[i]])));
+          const double abs_q_sum = std::abs(q_sum);
+          dk_dq1 = model.turbulence_factor_gamma[i] *
+                   std::sqrt(turbulence_factor_base / ref_length) * q_sum /
+                   (abs_q_sum * std::sqrt(abs_q_sum));
         }
         else
         {
           dk_dq1 = 0.0;
         }
-        double dk_dq2 = dk_dq1;
-        double dalpha_dk = -4.0 / ((4.0 * model.k_turb[i] - 1.0) * (4.0 * model.k_turb[i] - 1.0));
-        double alpha = 4.0 * model.k_turb[i] / (4.0 * model.k_turb[i] - 1.0);
-
-        double resistance = poiseuille_resistance * model.k_turb[i] +
-                            2 * data.air_properties.density * alpha / (area[i] * area[i]) *
-                                (dofs.local_values_as_span()[data.lid_q2[i]] -
-                                    dofs.local_values_as_span()[data.lid_q1[i]]);
+        const double dk_dq2 = dk_dq1;
+        const double alpha_denominator = 4.0 * k_turb - 1.0;
+        const double dalpha_dk = -4.0 / (alpha_denominator * alpha_denominator);
+        const double alpha = 4.0 * k_turb / alpha_denominator;
+        const double density_alpha_over_area_squared = density * alpha / area_squared;
+        const double density_q_difference_over_area_squared = density * q_difference / area_squared;
+        const double resistance =
+            poiseuille_resistance * k_turb + 2.0 * density_alpha_over_area_squared * q_difference;
         resistance_derivative_q1[i] =
-            -0.5 *
-            ((dRp_da * da_dq1 * model.k_turb[i] + poiseuille_resistance * dk_dq1 +
-                 2 * data.air_properties.density *
-                     (dofs.local_values_as_span()[data.lid_q2[i]] -
-                         dofs.local_values_as_span()[data.lid_q1[i]]) /
-                     (area[i] * area[i]) * dalpha_dk * dk_dq1 -
-                 2 * data.air_properties.density * alpha / (area[i] * area[i]) -
-                 4 * data.air_properties.density * alpha / (area[i] * area[i] * area[i]) * da_dq1 *
-                     (dofs.local_values_as_span()[data.lid_q2[i]] -
-                         dofs.local_values_as_span()[data.lid_q1[i]])) *
-                    (dofs.local_values_as_span()[data.lid_q1[i]] +
-                        dofs.local_values_as_span()[data.lid_q2[i]]) +
-                resistance);
+            -0.5 * ((dRp_da * da_dq1 * k_turb + poiseuille_resistance * dk_dq1 +
+                        2.0 * density_q_difference_over_area_squared * dalpha_dk * dk_dq1 -
+                        2.0 * density_alpha_over_area_squared -
+                        4.0 * density * alpha / area_cubed * da_dq1 * q_difference) *
+                           q_sum +
+                       resistance);
         resistance_derivative_q2[i] =
-            -0.5 *
-            ((dRp_da * da_dq2 * model.k_turb[i] + poiseuille_resistance * dk_dq2 +
-                 2 * data.air_properties.density *
-                     (dofs.local_values_as_span()[data.lid_q2[i]] -
-                         dofs.local_values_as_span()[data.lid_q1[i]]) /
-                     (area[i] * area[i]) * dalpha_dk * dk_dq2 +
-                 2 * data.air_properties.density * alpha / (area[i] * area[i]) -
-                 4 * data.air_properties.density * alpha / (area[i] * area[i] * area[i]) * da_dq2 *
-                     (dofs.local_values_as_span()[data.lid_q2[i]] -
-                         dofs.local_values_as_span()[data.lid_q1[i]])) *
-                    (dofs.local_values_as_span()[data.lid_q1[i]] +
-                        dofs.local_values_as_span()[data.lid_q2[i]]) +
-                resistance);
+            -0.5 * ((dRp_da * da_dq2 * k_turb + poiseuille_resistance * dk_dq2 +
+                        2.0 * density_q_difference_over_area_squared * dalpha_dk * dk_dq2 +
+                        2.0 * density_alpha_over_area_squared -
+                        4.0 * density * alpha / area_cubed * da_dq2 * q_difference) *
+                           q_sum +
+                       resistance);
       }
     }
 
@@ -236,29 +230,26 @@ namespace ReducedLung::Airways::FlowResistance
           inertia_q1, data.number_of_elements(), "Kelvin-Voigt q1 inertia derivative");
       assert_output_size(
           inertia_q2, data.number_of_elements(), "Kelvin-Voigt q2 inertia derivative");
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const double density = data.air_properties.density;
+      const double inertia_factor = -0.5 / dt;
       for (size_t i = 0; i < data.number_of_elements(); ++i)
       {
         inertia_q1[i] = 0.0;
         inertia_q2[i] = 0.0;
         if (i < has_inertia.size() && has_inertia[i])
         {
-          double dI_da =
-              -data.air_properties.density * data.ref_length[i] / (wall.area[i] * wall.area[i]);
-          double da_dq1 = dt / data.ref_length[i];
-          double da_dq2 = -dt / data.ref_length[i];
-          inertia_q1[i] = -0.5 / dt *
-                          (data.air_properties.density * data.ref_length[i] / wall.area[i] +
-                              dI_da * da_dq1 *
-                                  (locally_relevant_dofs.local_values_as_span()[data.lid_q1[i]] +
-                                      locally_relevant_dofs.local_values_as_span()[data.lid_q2[i]] -
-                                      data.q1_n[i] - data.q2_n[i]));
-
-          inertia_q2[i] = -0.5 / dt *
-                          (data.air_properties.density * data.ref_length[i] / wall.area[i] +
-                              dI_da * da_dq2 *
-                                  (locally_relevant_dofs.local_values_as_span()[data.lid_q1[i]] +
-                                      locally_relevant_dofs.local_values_as_span()[data.lid_q2[i]] -
-                                      data.q1_n[i] - data.q2_n[i]));
+          const double ref_length = data.ref_length[i];
+          const double area_i = wall.area[i];
+          const double area_squared = area_i * area_i;
+          const double dI_da = -density * ref_length / area_squared;
+          const double da_dq1 = dt / ref_length;
+          const double da_dq2 = -dt / ref_length;
+          const double inertia = density * ref_length / area_i;
+          const double q_history_difference =
+              dof_values[data.lid_q1[i]] + dof_values[data.lid_q2[i]] - data.q1_n[i] - data.q2_n[i];
+          inertia_q1[i] = inertia_factor * (inertia + dI_da * da_dq1 * q_history_difference);
+          inertia_q2[i] = inertia_factor * (inertia + dI_da * da_dq2 * q_history_difference);
         }
       }
     }
