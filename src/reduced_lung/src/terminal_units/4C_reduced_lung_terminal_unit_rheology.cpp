@@ -196,27 +196,32 @@ namespace ReducedLung::TerminalUnits::Rheology
     }
 
     void evaluate_four_element_maxwell_tree_linearization(TreeCoefficientAssemblyTarget& target,
-        const FourElementMaxwell& four_element_maxwell_model, TerminalUnitData& data,
+        FourElementMaxwell& four_element_maxwell_model, TerminalUnitData& data,
         const Core::LinAlg::Vector<double>& locally_relevant_dofs,
         const Elasticity::ElasticPressurePartialsView& elastic_pressure_partials, double dt)
     {
-      for (size_t i = 0; i < data.number_of_elements(); i++)
+      const size_t element_count = data.number_of_elements();
+      const auto& viscosity = four_element_maxwell_model.viscosity_eta;
+      const auto& maxwell_elasticity = four_element_maxwell_model.elasticity_E_m;
+      const auto& maxwell_viscosity = four_element_maxwell_model.viscosity_eta_m;
+      std::span<double> grad_q =
+          resize_scratch(four_element_maxwell_model.tree_linearization_grad_q, element_count);
+      for (size_t i = 0; i < element_count; i++)
       {
         const auto& context = data.reference_volume_context[i];
         const double q = locally_relevant_dofs.local_values_as_span()[data.lid_q[i]];
-        const double damping = four_element_maxwell_model.viscosity_eta[i] +
-                               four_element_maxwell_model.elasticity_E_m[i] * dt *
-                                   four_element_maxwell_model.viscosity_eta_m[i] /
-                                   (four_element_maxwell_model.elasticity_E_m[i] * dt +
-                                       four_element_maxwell_model.viscosity_eta_m[i]);
+        const double maxwell_elasticity_dt = maxwell_elasticity[i] * dt;
+        const double maxwell_branch_viscosity = maxwell_elasticity_dt * maxwell_viscosity[i] /
+                                                (maxwell_elasticity_dt + maxwell_viscosity[i]);
+        const double damping = viscosity[i] + maxwell_branch_viscosity;
         const double alpha = (-elastic_pressure_partials.dp_el_dv0[i] +
                                  damping * q * context.inv_v0_eff * context.inv_v0_eff) *
                              context.dv0_dp;
         target.replace_value(data.local_row_id[i], data.lid_p1[i], 1.0 + alpha);
         target.replace_value(data.local_row_id[i], data.lid_p2[i], -1.0 - alpha);
-        target.replace_value(data.local_row_id[i], data.lid_q[i],
-            -elastic_pressure_partials.dp_el_dq[i] - damping * context.inv_v0_eff);
+        grad_q[i] = -elastic_pressure_partials.dp_el_dq[i] - damping * context.inv_v0_eff;
       }
+      target.replace_values(data.local_row_id, data.lid_q, grad_q);
     }
 
     void initialize_tree_linearization(
@@ -495,6 +500,7 @@ namespace ReducedLung::TerminalUnits::Rheology
                 parameters.four_element_maxwell.viscosity_maxwell_eta_m.at(
                     global_element_id, "viscosity_maxwell_eta_m"));
             model.maxwell_pressure_p_m.push_back(0.0);
+            model.tree_linearization_grad_q.push_back(0.0);
           }
           else
           {
