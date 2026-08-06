@@ -118,7 +118,8 @@ namespace ReducedLung::Airways::WallMechanics
   /**
    * @brief Build residual evaluator callback for the concrete wall-model variant.
    */
-  ResidualEvaluator make_residual_evaluator(WallModel& wall_model, FlowModel& flow_model);
+  ResidualEvaluator make_residual_evaluator(
+      WallModel& wall_model, FlowModel& flow_model, const AirwayData& data);
 
   /**
    * @brief Build Jacobian evaluator callback for the concrete wall-model variant.

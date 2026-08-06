@@ -126,7 +126,7 @@ namespace ReducedLung::Airways
     for (auto& model : airways.models)
     {
       model.residual_evaluator =
-          WallMechanics::make_residual_evaluator(model.wall_model, model.flow_model);
+          WallMechanics::make_residual_evaluator(model.wall_model, model.flow_model, model.data);
       model.jacobian_evaluator =
           WallMechanics::make_jacobian_evaluator(model.wall_model, model.flow_model);
       model.static_tree_linearization_evaluator =

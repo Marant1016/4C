@@ -71,7 +71,7 @@ namespace
     model.internal_state_updater = WallMechanics::make_internal_state_updater(
         model.wall_model, FlowResistance::make_internal_state_updater(model.flow_model));
     model.residual_evaluator =
-        WallMechanics::make_residual_evaluator(model.wall_model, model.flow_model);
+        WallMechanics::make_residual_evaluator(model.wall_model, model.flow_model, model.data);
     model.jacobian_evaluator =
         WallMechanics::make_jacobian_evaluator(model.wall_model, model.flow_model);
   }
