@@ -18,6 +18,7 @@
 #include "4C_utils_exceptions.hpp"
 
 #include <chrono>
+#include <cmath>
 
 FOUR_C_NAMESPACE_OPEN
 
@@ -30,6 +31,23 @@ namespace ReducedLung
     double elapsed_seconds(const Clock::time_point start)
     {
       return std::chrono::duration<double>(Clock::now() - start).count();
+    }
+
+    double compute_residual_norm(const Core::LinAlg::Vector<double>& residual)
+    {
+      if (Core::Communication::num_mpi_ranks(residual.get_comm()) != 1)
+      {
+        double norm = 0.0;
+        residual.norm_2(&norm);
+        return norm;
+      }
+
+      double norm_square = 0.0;
+      for (const double value : residual.local_values_as_span())
+      {
+        norm_square += value * value;
+      }
+      return std::sqrt(norm_square);
     }
 
     void add_tree_linearization_phase_time(NewtonSolverProfile& profile,
@@ -255,7 +273,7 @@ namespace ReducedLung
 
     double residual_norm = 0.0;
     const auto norm_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
-    residual_.norm_2(&residual_norm);
+    residual_norm = compute_residual_norm(residual_);
     if (profile_ != nullptr)
     {
       profile_->residual_norm_time += elapsed_seconds(norm_start);
