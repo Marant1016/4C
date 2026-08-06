@@ -27,6 +27,66 @@ namespace ReducedLung::TerminalUnits::Rheology
       return std::span<double>(scratch.data(), scratch.size());
     }
 
+    bool all_viscosity_zero(const KelvinVoigt& kelvin_voigt_model)
+    {
+      for (const double viscosity : kelvin_voigt_model.viscosity_eta)
+      {
+        if (viscosity != 0.0) return false;
+      }
+      return true;
+    }
+
+    void evaluate_linear_kelvin_voigt_zero_viscosity_residual(Core::LinAlg::Vector<double>& target,
+        LinearElasticity& linear_elastic_model, const TerminalUnitData& data,
+        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+    {
+      auto residual_values = target.local_values_as_span();
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const auto& local_row_id = data.local_row_id;
+      const auto& lid_p1 = data.lid_p1;
+      const auto& lid_p2 = data.lid_p2;
+      const auto& lid_q = data.lid_q;
+      const auto& volume = data.volume_v;
+      const auto& reference_volume = data.reference_volume_v0;
+      const auto& elasticity = linear_elastic_model.elasticity_E;
+      auto& elastic_pressure = linear_elastic_model.elastic_pressure_p_el;
+      for (size_t i = 0; i < data.number_of_elements(); i++)
+      {
+        const double pressure =
+            elasticity[i] * ((volume[i] + dt * dof_values[lid_q[i]]) / reference_volume[i] - 1.0);
+        elastic_pressure[i] = pressure;
+        residual_values[static_cast<std::size_t>(local_row_id[i])] =
+            dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - pressure;
+      }
+    }
+
+    void evaluate_linear_kelvin_voigt_residual(Core::LinAlg::Vector<double>& target,
+        const KelvinVoigt& kelvin_voigt_model, LinearElasticity& linear_elastic_model,
+        const TerminalUnitData& data, const Core::LinAlg::Vector<double>& locally_relevant_dofs,
+        double dt)
+    {
+      auto residual_values = target.local_values_as_span();
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const auto& local_row_id = data.local_row_id;
+      const auto& lid_p1 = data.lid_p1;
+      const auto& lid_p2 = data.lid_p2;
+      const auto& lid_q = data.lid_q;
+      const auto& volume = data.volume_v;
+      const auto& reference_volume = data.reference_volume_v0;
+      const auto& elasticity = linear_elastic_model.elasticity_E;
+      auto& elastic_pressure = linear_elastic_model.elastic_pressure_p_el;
+      const auto& viscosity = kelvin_voigt_model.viscosity_eta;
+      for (size_t i = 0; i < data.number_of_elements(); i++)
+      {
+        const double q = dof_values[lid_q[i]];
+        const double pressure = elasticity[i] * ((volume[i] + dt * q) / reference_volume[i] - 1.0);
+        elastic_pressure[i] = pressure;
+        residual_values[static_cast<std::size_t>(local_row_id[i])] =
+            dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - pressure -
+            viscosity[i] * q / reference_volume[i];
+      }
+    }
+
     /**
      * Assemble Kelvin-Voigt residual entries for one model block.
      */
@@ -265,8 +325,8 @@ namespace ReducedLung::TerminalUnits::Rheology
   /**
    * Resolve variant-based residual evaluator.
    */
-  ResidualEvaluator make_residual_evaluator(
-      RheologicalModel& rheological_model, Elasticity::ElasticPressureEvaluator pressure_evaluator)
+  ResidualEvaluator make_residual_evaluator(RheologicalModel& rheological_model,
+      ElasticityModel& elasticity_model, Elasticity::ElasticPressureEvaluator pressure_evaluator)
   {
     return std::visit(
         [&](auto& model) -> ResidualEvaluator
@@ -274,6 +334,29 @@ namespace ReducedLung::TerminalUnits::Rheology
           using ModelType = std::decay_t<decltype(model)>;
           if constexpr (std::is_same_v<ModelType, KelvinVoigt>)
           {
+            if (auto* linear_elastic_model = std::get_if<LinearElasticity>(&elasticity_model);
+                linear_elastic_model != nullptr)
+            {
+              if (all_viscosity_zero(model))
+              {
+                return [linear_elastic_model](TerminalUnitData& data,
+                           Core::LinAlg::Vector<double>& target,
+                           const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+                {
+                  evaluate_linear_kelvin_voigt_zero_viscosity_residual(
+                      target, *linear_elastic_model, data, locally_relevant_dofs, dt);
+                };
+              }
+
+              return [&model, linear_elastic_model](TerminalUnitData& data,
+                         Core::LinAlg::Vector<double>& target,
+                         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
+              {
+                evaluate_linear_kelvin_voigt_residual(
+                    target, model, *linear_elastic_model, data, locally_relevant_dofs, dt);
+              };
+            }
+
             return [&model, pressure_evaluator](TerminalUnitData& data,
                        Core::LinAlg::Vector<double>& target,
                        const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)

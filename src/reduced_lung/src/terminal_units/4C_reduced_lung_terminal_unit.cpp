@@ -167,8 +167,8 @@ namespace ReducedLung
         auto elastic_pressure_partials_evaluator =
             Elasticity::make_elastic_pressure_partials_evaluator(model.elasticity_model);
 
-        model.residual_evaluator =
-            Rheology::make_residual_evaluator(model.rheological_model, elastic_pressure_evaluator);
+        model.residual_evaluator = Rheology::make_residual_evaluator(
+            model.rheological_model, model.elasticity_model, elastic_pressure_evaluator);
         model.jacobian_evaluator = Rheology::make_jacobian_evaluator(
             model.rheological_model, elastic_pressure_partials_evaluator);
         model.static_tree_linearization_evaluator =

@@ -102,8 +102,8 @@ namespace ReducedLung::TerminalUnits::Rheology
   /**
    * @brief Build residual evaluator callback for the concrete rheology variant.
    */
-  ResidualEvaluator make_residual_evaluator(
-      RheologicalModel& rheological_model, Elasticity::ElasticPressureEvaluator pressure_evaluator);
+  ResidualEvaluator make_residual_evaluator(RheologicalModel& rheological_model,
+      ElasticityModel& elasticity_model, Elasticity::ElasticPressureEvaluator pressure_evaluator);
 
   /**
    * @brief Build Jacobian evaluator callback for the concrete rheology variant.
