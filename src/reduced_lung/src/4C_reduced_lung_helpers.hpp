@@ -106,6 +106,12 @@ namespace ReducedLung
       TreeLinearizationAssembler callback;
     };
 
+    struct NamedResidualAssembler
+    {
+      TreeLinearizationAssemblyPhase phase = TreeLinearizationAssemblyPhase::Other;
+      ResidualAssembler callback;
+    };
+
     struct NamedStaticTreeLinearizationAssembler
     {
       TreeLinearizationAssemblyPhase phase = TreeLinearizationAssemblyPhase::Other;
@@ -116,6 +122,7 @@ namespace ReducedLung
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double time_step_size_dt)>;
 
     std::vector<ResidualAssembler> residual_assemblers;
+    std::vector<NamedResidualAssembler> named_residual_assemblers;
     std::vector<JacobianAssembler> jacobian_assemblers;
     std::vector<TreeLinearizationCapacityInitializer> tree_linearization_capacity_initializers;
     std::vector<NamedStaticTreeLinearizationAssembler> tree_linearization_static_assemblers;

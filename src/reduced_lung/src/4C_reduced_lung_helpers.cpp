@@ -66,6 +66,7 @@ namespace ReducedLung
       BoundaryConditions::BoundaryConditionContainer& boundary_conditions)
   {
     ReducedLungAssemblyPipeline pipeline;
+    using Phase = ReducedLungAssemblyPipeline::TreeLinearizationAssemblyPhase;
 
     pipeline.residual_assemblers.emplace_back(
         [&airways](Core::LinAlg::Vector<double>& residual,
@@ -75,6 +76,8 @@ namespace ReducedLung
           Airways::update_residual_vector(
               residual, airways, locally_relevant_dofs, time_step_size_dt);
         });
+    pipeline.named_residual_assemblers.push_back(
+        {.phase = Phase::Airways, .callback = pipeline.residual_assemblers.back()});
     pipeline.residual_assemblers.emplace_back(
         [&terminal_units](Core::LinAlg::Vector<double>& residual,
             const Core::LinAlg::Vector<double>& locally_relevant_dofs, double /*current_time*/,
@@ -83,6 +86,8 @@ namespace ReducedLung
           TerminalUnits::update_residual_vector(
               residual, terminal_units, locally_relevant_dofs, time_step_size_dt);
         });
+    pipeline.named_residual_assemblers.push_back(
+        {.phase = Phase::TerminalUnits, .callback = pipeline.residual_assemblers.back()});
     pipeline.residual_assemblers.emplace_back(
         [&connections, &bifurcations](Core::LinAlg::Vector<double>& residual,
             const Core::LinAlg::Vector<double>& locally_relevant_dofs, double /*current_time*/,
@@ -91,6 +96,8 @@ namespace ReducedLung
           Junctions::update_residual_vector(
               residual, connections, bifurcations, locally_relevant_dofs);
         });
+    pipeline.named_residual_assemblers.push_back(
+        {.phase = Phase::Junctions, .callback = pipeline.residual_assemblers.back()});
     pipeline.residual_assemblers.emplace_back(
         [&boundary_conditions](Core::LinAlg::Vector<double>& residual,
             const Core::LinAlg::Vector<double>& locally_relevant_dofs, double current_time,
@@ -99,6 +106,8 @@ namespace ReducedLung
           BoundaryConditions::update_residual_vector(
               residual, boundary_conditions, locally_relevant_dofs, current_time);
         });
+    pipeline.named_residual_assemblers.push_back(
+        {.phase = Phase::BoundaryConditions, .callback = pipeline.residual_assemblers.back()});
 
     pipeline.jacobian_assemblers.emplace_back(
         [&airways](Core::LinAlg::SparseMatrix& jacobian,

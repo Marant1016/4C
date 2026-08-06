@@ -55,6 +55,30 @@ namespace ReducedLung
           break;
       }
     }
+
+    void add_residual_phase_time(NewtonSolverProfile& profile,
+        ReducedLungAssemblyPipeline::TreeLinearizationAssemblyPhase phase, double elapsed_time)
+    {
+      using Phase = ReducedLungAssemblyPipeline::TreeLinearizationAssemblyPhase;
+      switch (phase)
+      {
+        case Phase::Airways:
+          profile.residual_airway_time += elapsed_time;
+          break;
+        case Phase::TerminalUnits:
+          profile.residual_terminal_unit_time += elapsed_time;
+          break;
+        case Phase::Junctions:
+          profile.residual_junction_time += elapsed_time;
+          break;
+        case Phase::BoundaryConditions:
+          profile.residual_boundary_condition_time += elapsed_time;
+          break;
+        case Phase::Other:
+          profile.residual_other_time += elapsed_time;
+          break;
+      }
+    }
   }  // namespace
 
   NewtonSolver::NewtonSolver(const NewtonSolverContext& context, double initial_time)
@@ -85,7 +109,8 @@ namespace ReducedLung
     {
       FOUR_C_THROW("ReducedLung::NewtonSolver requires a valid Newton linear solver instance.");
     }
-    if (assembly_pipeline_.residual_assemblers.empty())
+    if (assembly_pipeline_.residual_assemblers.empty() &&
+        assembly_pipeline_.named_residual_assemblers.empty())
     {
       FOUR_C_THROW("ReducedLung::NewtonSolver requires at least one residual assembler callback.");
     }
@@ -190,19 +215,51 @@ namespace ReducedLung
 
   double NewtonSolver::assemble_residual_for_current_state()
   {
+    const auto clear_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
     residual_.put_scalar(0.0);
-    const auto assembly_start = Clock::now();
-    for (const auto& assemble_residual : assembly_pipeline_.residual_assemblers)
+    if (profile_ != nullptr)
     {
-      assemble_residual(residual_, locally_relevant_dofs_, current_time_, dt_);
+      profile_->residual_clear_time += elapsed_seconds(clear_start);
+    }
+
+    const auto assembly_start = Clock::now();
+    if (!assembly_pipeline_.named_residual_assemblers.empty())
+    {
+      for (const auto& assemble_residual : assembly_pipeline_.named_residual_assemblers)
+      {
+        const auto phase_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
+        assemble_residual.callback(residual_, locally_relevant_dofs_, current_time_, dt_);
+        if (profile_ != nullptr)
+        {
+          add_residual_phase_time(*profile_, assemble_residual.phase, elapsed_seconds(phase_start));
+        }
+      }
+    }
+    else
+    {
+      const auto phase_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
+      for (const auto& assemble_residual : assembly_pipeline_.residual_assemblers)
+      {
+        assemble_residual(residual_, locally_relevant_dofs_, current_time_, dt_);
+      }
+      if (profile_ != nullptr)
+      {
+        profile_->residual_other_time += elapsed_seconds(phase_start);
+      }
     }
     if (profile_ != nullptr)
     {
       profile_->residual_assembly_time += elapsed_seconds(assembly_start);
+      ++profile_->residual_evaluation_count;
     }
 
     double residual_norm = 0.0;
+    const auto norm_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
     residual_.norm_2(&residual_norm);
+    if (profile_ != nullptr)
+    {
+      profile_->residual_norm_time += elapsed_seconds(norm_start);
+    }
     return residual_norm;
   }
 

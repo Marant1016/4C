@@ -436,57 +436,64 @@ namespace ReducedLung
         const auto average_uint64 = [](double total, std::uint64_t count)
         { return count > 0 ? total / static_cast<double>(count) : 0.0; };
 
-        std::cout << "\n-------- Reduced Lung Tree Profile --------\n"
-                  << "newton_solves: " << newton_profile_.solve_count << '\n'
-                  << "tree_linear_solves: " << tree_profile_.solve_count << '\n'
-                  << "newton_total_s: " << newton_profile_.total_solve_time << '\n'
-                  << "newton_total_s_avg: "
-                  << average(newton_profile_.total_solve_time, newton_profile_.solve_count) << '\n'
-                  << "state_sync_s: " << newton_profile_.state_sync_time << '\n'
-                  << "residual_s: " << newton_profile_.residual_assembly_time << '\n'
-                  << "sparse_assembly_s: " << newton_profile_.sparse_jacobian_assembly_time << '\n'
-                  << "sparse_complete_s: " << newton_profile_.sparse_jacobian_complete_time << '\n'
-                  << "tree_assembly_s: "
-                  << newton_profile_.structured_tree_linearization_assembly_time << '\n'
-                  << "tree_assembly_clear_s: " << newton_profile_.tree_linearization_clear_time
-                  << '\n'
-                  << "tree_assembly_airways_s: " << newton_profile_.tree_linearization_airway_time
-                  << '\n'
-                  << "tree_assembly_terminal_units_s: "
-                  << newton_profile_.tree_linearization_terminal_unit_time << '\n'
-                  << "tree_assembly_junctions_s: "
-                  << newton_profile_.tree_linearization_junction_time << '\n'
-                  << "tree_assembly_boundary_conditions_s: "
-                  << newton_profile_.tree_linearization_boundary_condition_time << '\n'
-                  << "tree_assembly_other_s: " << newton_profile_.tree_linearization_other_time
-                  << '\n'
-                  << "tree_assembly_solver_update_s: "
-                  << newton_profile_.tree_linearization_solver_update_time << '\n'
-                  << "linear_solve_s: " << newton_profile_.linear_solve_time << '\n'
-                  << "tree_solve_s: " << tree_profile_.total_solve_time << '\n'
-                  << "tree_solve_s_avg: "
-                  << average(tree_profile_.total_solve_time, tree_profile_.solve_count) << '\n'
-                  << "tree_bottom_up_s: " << tree_profile_.bottom_up_time << '\n'
-                  << "tree_top_down_s: " << tree_profile_.top_down_time << '\n'
-                  << "tree_dense_s: " << tree_profile_.dense_solve_time << '\n'
-                  << "tree_dense_s_avg: "
-                  << average_uint64(tree_profile_.dense_solve_time, tree_profile_.dense_solve_count)
-                  << '\n'
-                  << "tree_lookup_s: " << tree_profile_.coefficient_lookup_time << '\n'
-                  << "tree_dense_solves: " << tree_profile_.dense_solve_count << '\n'
-                  << "tree_lookups: " << tree_profile_.coefficient_lookup_count << '\n'
-                  << "tree_simd_groups: " << tree_profile_.simd_group_count << '\n'
-                  << "tree_simd_lanes: " << tree_profile_.simd_lane_count << '\n'
-                  << "tree_scalar_groups: " << tree_profile_.scalar_group_count << '\n'
-                  << "tree_scalar_tail_lanes: " << tree_profile_.scalar_tail_lane_count << '\n'
-                  << "tree_dense_fallbacks: " << tree_profile_.dense_fallback_count << '\n'
-                  << "tree_unsupported_fallbacks: "
-                  << tree_profile_.unsupported_block_fallback_count << '\n'
-                  << "tree_elements: " << tree_profile_.element_count << '\n'
-                  << "tree_workspace_dofs: " << tree_profile_.total_local_block_dofs << '\n'
-                  << "tree_max_block: " << tree_profile_.max_local_block_size << '\n'
-                  << "-------------------------------------------\n"
-                  << std::flush;
+        std::cout
+            << "\n-------- Reduced Lung Tree Profile --------\n"
+            << "newton_solves: " << newton_profile_.solve_count << '\n'
+            << "tree_linear_solves: " << tree_profile_.solve_count << '\n'
+            << "newton_total_s: " << newton_profile_.total_solve_time << '\n'
+            << "newton_total_s_avg: "
+            << average(newton_profile_.total_solve_time, newton_profile_.solve_count) << '\n'
+            << "state_sync_s: " << newton_profile_.state_sync_time << '\n'
+            << "residual_s: " << newton_profile_.residual_assembly_time << '\n'
+            << "residual_clear_s: " << newton_profile_.residual_clear_time << '\n'
+            << "residual_airways_s: " << newton_profile_.residual_airway_time << '\n'
+            << "residual_terminal_units_s: " << newton_profile_.residual_terminal_unit_time << '\n'
+            << "residual_junctions_s: " << newton_profile_.residual_junction_time << '\n'
+            << "residual_boundary_conditions_s: "
+            << newton_profile_.residual_boundary_condition_time << '\n'
+            << "residual_other_s: " << newton_profile_.residual_other_time << '\n'
+            << "residual_norm_s: " << newton_profile_.residual_norm_time << '\n'
+            << "residual_evaluations: " << newton_profile_.residual_evaluation_count << '\n'
+            << "sparse_assembly_s: " << newton_profile_.sparse_jacobian_assembly_time << '\n'
+            << "sparse_complete_s: " << newton_profile_.sparse_jacobian_complete_time << '\n'
+            << "tree_assembly_s: " << newton_profile_.structured_tree_linearization_assembly_time
+            << '\n'
+            << "tree_assembly_clear_s: " << newton_profile_.tree_linearization_clear_time << '\n'
+            << "tree_assembly_airways_s: " << newton_profile_.tree_linearization_airway_time << '\n'
+            << "tree_assembly_terminal_units_s: "
+            << newton_profile_.tree_linearization_terminal_unit_time << '\n'
+            << "tree_assembly_junctions_s: " << newton_profile_.tree_linearization_junction_time
+            << '\n'
+            << "tree_assembly_boundary_conditions_s: "
+            << newton_profile_.tree_linearization_boundary_condition_time << '\n'
+            << "tree_assembly_other_s: " << newton_profile_.tree_linearization_other_time << '\n'
+            << "tree_assembly_solver_update_s: "
+            << newton_profile_.tree_linearization_solver_update_time << '\n'
+            << "linear_solve_s: " << newton_profile_.linear_solve_time << '\n'
+            << "tree_solve_s: " << tree_profile_.total_solve_time << '\n'
+            << "tree_solve_s_avg: "
+            << average(tree_profile_.total_solve_time, tree_profile_.solve_count) << '\n'
+            << "tree_bottom_up_s: " << tree_profile_.bottom_up_time << '\n'
+            << "tree_top_down_s: " << tree_profile_.top_down_time << '\n'
+            << "tree_dense_s: " << tree_profile_.dense_solve_time << '\n'
+            << "tree_dense_s_avg: "
+            << average_uint64(tree_profile_.dense_solve_time, tree_profile_.dense_solve_count)
+            << '\n'
+            << "tree_lookup_s: " << tree_profile_.coefficient_lookup_time << '\n'
+            << "tree_dense_solves: " << tree_profile_.dense_solve_count << '\n'
+            << "tree_lookups: " << tree_profile_.coefficient_lookup_count << '\n'
+            << "tree_simd_groups: " << tree_profile_.simd_group_count << '\n'
+            << "tree_simd_lanes: " << tree_profile_.simd_lane_count << '\n'
+            << "tree_scalar_groups: " << tree_profile_.scalar_group_count << '\n'
+            << "tree_scalar_tail_lanes: " << tree_profile_.scalar_tail_lane_count << '\n'
+            << "tree_dense_fallbacks: " << tree_profile_.dense_fallback_count << '\n'
+            << "tree_unsupported_fallbacks: " << tree_profile_.unsupported_block_fallback_count
+            << '\n'
+            << "tree_elements: " << tree_profile_.element_count << '\n'
+            << "tree_workspace_dofs: " << tree_profile_.total_local_block_dofs << '\n'
+            << "tree_max_block: " << tree_profile_.max_local_block_size << '\n'
+            << "-------------------------------------------\n"
+            << std::flush;
       }
 
       const ReducedLungContext context_;

@@ -35,6 +35,13 @@ namespace ReducedLung
     double total_solve_time = 0.0;
     double state_sync_time = 0.0;
     double residual_assembly_time = 0.0;
+    double residual_clear_time = 0.0;
+    double residual_airway_time = 0.0;
+    double residual_terminal_unit_time = 0.0;
+    double residual_junction_time = 0.0;
+    double residual_boundary_condition_time = 0.0;
+    double residual_other_time = 0.0;
+    double residual_norm_time = 0.0;
     double sparse_jacobian_assembly_time = 0.0;
     double sparse_jacobian_complete_time = 0.0;
     double structured_tree_linearization_assembly_time = 0.0;
@@ -47,6 +54,7 @@ namespace ReducedLung
     double tree_linearization_solver_update_time = 0.0;
     double linear_solve_time = 0.0;
     unsigned int solve_count = 0;
+    unsigned int residual_evaluation_count = 0;
     unsigned int last_nonlinear_iterations = 0;
     std::vector<double> last_residual_norms;
     std::vector<double> last_increment_norms;
