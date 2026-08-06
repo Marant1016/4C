@@ -59,11 +59,14 @@ namespace ReducedLung
           Core::LinAlg::Vector<double>& rhs, const Core::LinAlg::Vector<double>& dofs,
           double bc_value)
       {
+        auto residual_values = rhs.local_values_as_span();
+        const auto dof_values = dofs.local_values_as_span();
+        const auto& local_dof_id = model.data.local_dof_id;
+        const auto& local_equation_id = model.data.local_equation_id;
         for (size_t i = 0; i < model.data.size(); ++i)
         {
-          const int local_dof_id = model.data.local_dof_id[i];
-          const double res = dofs.local_values_as_span()[local_dof_id] - bc_value;
-          rhs.replace_local_value(model.data.local_equation_id[i], res);
+          const double res = dof_values[local_dof_id[i]] - bc_value;
+          residual_values[static_cast<std::size_t>(local_equation_id[i])] = res;
         }
       }
 

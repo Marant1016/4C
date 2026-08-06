@@ -35,16 +35,20 @@ namespace ReducedLung::TerminalUnits::Rheology
         const Core::LinAlg::Vector<double>& locally_relevant_dofs,
         const std::vector<double>& elastic_pressure_p_el)
     {
+      auto residual_values = target.local_values_as_span();
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const auto& local_row_id = data.local_row_id;
+      const auto& lid_p1 = data.lid_p1;
+      const auto& lid_p2 = data.lid_p2;
+      const auto& lid_q = data.lid_q;
+      const auto& viscosity = kelvin_voigt_model.viscosity_eta;
       for (size_t i = 0; i < data.number_of_elements(); i++)
       {
         const double inv_v0 = data.reference_volume_context[i].inv_v0_eff;
         const double kelvin_voigt_residual =
-            (locally_relevant_dofs.local_values_as_span()[data.lid_p1[i]] -
-                locally_relevant_dofs.local_values_as_span()[data.lid_p2[i]] -
-                elastic_pressure_p_el[i] -
-                kelvin_voigt_model.viscosity_eta[i] *
-                    locally_relevant_dofs.local_values_as_span()[data.lid_q[i]] * inv_v0);
-        target.replace_local_value(data.local_row_id[i], kelvin_voigt_residual);
+            (dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - elastic_pressure_p_el[i] -
+                viscosity[i] * dof_values[lid_q[i]] * inv_v0);
+        residual_values[static_cast<std::size_t>(local_row_id[i])] = kelvin_voigt_residual;
       }
     }
 
@@ -56,24 +60,27 @@ namespace ReducedLung::TerminalUnits::Rheology
         const Core::LinAlg::Vector<double>& locally_relevant_dofs,
         const std::vector<double>& elastic_pressure_p_el, double dt)
     {
+      auto residual_values = target.local_values_as_span();
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const auto& local_row_id = data.local_row_id;
+      const auto& lid_p1 = data.lid_p1;
+      const auto& lid_p2 = data.lid_p2;
+      const auto& lid_q = data.lid_q;
+      const auto& viscosity = four_element_maxwell_model.viscosity_eta;
+      const auto& maxwell_elasticity = four_element_maxwell_model.elasticity_E_m;
+      const auto& maxwell_viscosity = four_element_maxwell_model.viscosity_eta_m;
+      const auto& maxwell_pressure = four_element_maxwell_model.maxwell_pressure_p_m;
       for (size_t i = 0; i < data.number_of_elements(); i++)
       {
         const double inv_v0 = data.reference_volume_context[i].inv_v0_eff;
         const double four_element_maxwell_residual =
-            (locally_relevant_dofs.local_values_as_span()[data.lid_p1[i]] -
-                locally_relevant_dofs.local_values_as_span()[data.lid_p2[i]] -
-                elastic_pressure_p_el[i] -
-                (four_element_maxwell_model.viscosity_eta[i] +
-                    (four_element_maxwell_model.elasticity_E_m[i] * dt *
-                        four_element_maxwell_model.viscosity_eta_m[i]) /
-                        (four_element_maxwell_model.elasticity_E_m[i] * dt +
-                            four_element_maxwell_model.viscosity_eta_m[i])) *
-                    inv_v0 * locally_relevant_dofs.local_values_as_span()[data.lid_q[i]] -
-                four_element_maxwell_model.viscosity_eta_m[i] /
-                    (four_element_maxwell_model.elasticity_E_m[i] * dt +
-                        four_element_maxwell_model.viscosity_eta_m[i]) *
-                    four_element_maxwell_model.maxwell_pressure_p_m[i]);
-        target.replace_local_value(data.local_row_id[i], four_element_maxwell_residual);
+            (dof_values[lid_p1[i]] - dof_values[lid_p2[i]] - elastic_pressure_p_el[i] -
+                (viscosity[i] + (maxwell_elasticity[i] * dt * maxwell_viscosity[i]) /
+                                    (maxwell_elasticity[i] * dt + maxwell_viscosity[i])) *
+                    inv_v0 * dof_values[lid_q[i]] -
+                maxwell_viscosity[i] / (maxwell_elasticity[i] * dt + maxwell_viscosity[i]) *
+                    maxwell_pressure[i]);
+        residual_values[static_cast<std::size_t>(local_row_id[i])] = four_element_maxwell_residual;
       }
     }
 

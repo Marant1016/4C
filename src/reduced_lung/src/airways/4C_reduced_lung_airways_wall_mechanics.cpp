@@ -44,15 +44,19 @@ namespace ReducedLung::Airways::WallMechanics
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, std::span<const double> resistance,
       std::span<const double> inertia, double dt)
   {
+    auto residual_values = target.local_values_as_span();
+    const auto dof_values = locally_relevant_dofs.local_values_as_span();
+    const auto& local_row_id = data.local_row_id;
+    const auto& lid_p1 = data.lid_p1;
+    const auto& lid_p2 = data.lid_p2;
+    const auto& lid_q1 = data.lid_q1;
+    const auto& q1_n = data.q1_n;
     for (size_t i = 0; i < data.number_of_elements(); i++)
     {
-      double rigid_wall_residual =
-          (locally_relevant_dofs.local_values_as_span()[data.lid_p1[i]] -
-              locally_relevant_dofs.local_values_as_span()[data.lid_p2[i]] -
-              resistance[i] * locally_relevant_dofs.local_values_as_span()[data.lid_q1[i]] -
-              inertia[i] / dt *
-                  (locally_relevant_dofs.local_values_as_span()[data.lid_q1[i]] - data.q1_n[i]));
-      target.replace_local_value(data.local_row_id[i], rigid_wall_residual);
+      const double q1 = dof_values[lid_q1[i]];
+      double rigid_wall_residual = (dof_values[lid_p1[i]] - dof_values[lid_p2[i]] -
+                                    resistance[i] * q1 - inertia[i] / dt * (q1 - q1_n[i]));
+      residual_values[static_cast<std::size_t>(local_row_id[i])] = rigid_wall_residual;
     }
   }
 
@@ -61,29 +65,35 @@ namespace ReducedLung::Airways::WallMechanics
       const Core::LinAlg::Vector<double>& locally_relevant_dofs, std::span<const double> resistance,
       std::span<const double> inertia, double dt)
   {
+    auto residual_values = target.local_values_as_span();
+    const auto dof_values = locally_relevant_dofs.local_values_as_span();
+    const auto& local_row_id = data.local_row_id;
+    const auto& lid_p1 = data.lid_p1;
+    const auto& lid_p2 = data.lid_p2;
+    const auto& lid_q1 = data.lid_q1;
+    const auto& lid_q2 = data.lid_q2;
+    const auto& p1_n = data.p1_n;
+    const auto& p2_n = data.p2_n;
+    const auto& q1_n = data.q1_n;
+    const auto& q2_n = data.q2_n;
+    const auto& viscous_resistance = kelvin_voigt_wall_model.viscous_resistance_Rvisc;
+    const auto& compliance = kelvin_voigt_wall_model.compliance_C;
     for (size_t i = 0; i < data.number_of_elements(); i++)
     {
-      const int momentum_row = data.local_row_id[i];
-      const int mass_row = data.local_row_id[i] + 1;
+      const int momentum_row = local_row_id[i];
+      const int mass_row = local_row_id[i] + 1;
+      const double p1 = dof_values[lid_p1[i]];
+      const double p2 = dof_values[lid_p2[i]];
+      const double q1 = dof_values[lid_q1[i]];
+      const double q2 = dof_values[lid_q2[i]];
 
-      double res_momentum = (locally_relevant_dofs.local_values_as_span()[data.lid_p1[i]] -
-                             locally_relevant_dofs.local_values_as_span()[data.lid_p2[i]] -
-                             (resistance[i] / 2 + inertia[i] / (2 * dt)) *
-                                 (locally_relevant_dofs.local_values_as_span()[data.lid_q1[i]] +
-                                     locally_relevant_dofs.local_values_as_span()[data.lid_q2[i]]) +
-                             inertia[i] / (2 * dt) * (data.q1_n[i] + data.q2_n[i]));
-      double res_mass = (locally_relevant_dofs.local_values_as_span()[data.lid_p1[i]] +
-                         locally_relevant_dofs.local_values_as_span()[data.lid_p2[i]] -
-                         data.p1_n[i] - data.p2_n[i] -
-                         2 *
-                             (kelvin_voigt_wall_model.viscous_resistance_Rvisc[i] +
-                                 dt / kelvin_voigt_wall_model.compliance_C[i]) *
-                             (locally_relevant_dofs.local_values_as_span()[data.lid_q1[i]] -
-                                 locally_relevant_dofs.local_values_as_span()[data.lid_q2[i]]) +
-                         2 * kelvin_voigt_wall_model.viscous_resistance_Rvisc[i] *
-                             (data.q1_n[i] - data.q2_n[i]));
-      target.replace_local_value(momentum_row, res_momentum);
-      target.replace_local_value(mass_row, res_mass);
+      double res_momentum = (p1 - p2 - (resistance[i] / 2 + inertia[i] / (2 * dt)) * (q1 + q2) +
+                             inertia[i] / (2 * dt) * (q1_n[i] + q2_n[i]));
+      double res_mass = (p1 + p2 - p1_n[i] - p2_n[i] -
+                         2 * (viscous_resistance[i] + dt / compliance[i]) * (q1 - q2) +
+                         2 * viscous_resistance[i] * (q1_n[i] - q2_n[i]));
+      residual_values[static_cast<std::size_t>(momentum_row)] = res_momentum;
+      residual_values[static_cast<std::size_t>(mass_row)] = res_mass;
     }
   }
 

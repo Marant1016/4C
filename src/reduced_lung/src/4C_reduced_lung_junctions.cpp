@@ -260,44 +260,37 @@ namespace ReducedLung
         const ConnectionData& connections, const BifurcationData& bifurcations,
         const Core::LinAlg::Vector<double>& locally_relevant_dofs)
     {
+      auto residual_values = rhs.local_values_as_span();
+      const auto dof_values = locally_relevant_dofs.local_values_as_span();
+      const auto& connection_equation_id = connections.first_local_equation_id;
       for (size_t i = 0; i < connections.size(); ++i)
       {
         const auto& local_dof_ids = connections.local_dof_ids[i];
-        double res =
-            locally_relevant_dofs
-                .local_values_as_span()[local_dof_ids[ConnectionData::p_out_parent]] -
-            locally_relevant_dofs.local_values_as_span()[local_dof_ids[ConnectionData::p_in_child]];
-        rhs.replace_local_value(connections.first_local_equation_id[i], res);
+        double res = dof_values[local_dof_ids[ConnectionData::p_out_parent]] -
+                     dof_values[local_dof_ids[ConnectionData::p_in_child]];
+        residual_values[static_cast<std::size_t>(connection_equation_id[i])] = res;
 
-        res =
-            locally_relevant_dofs
-                .local_values_as_span()[local_dof_ids[ConnectionData::q_out_parent]] -
-            locally_relevant_dofs.local_values_as_span()[local_dof_ids[ConnectionData::q_in_child]];
-        rhs.replace_local_value(connections.first_local_equation_id[i] + 1, res);
+        res = dof_values[local_dof_ids[ConnectionData::q_out_parent]] -
+              dof_values[local_dof_ids[ConnectionData::q_in_child]];
+        residual_values[static_cast<std::size_t>(connection_equation_id[i] + 1)] = res;
       }
 
+      const auto& bifurcation_equation_id = bifurcations.first_local_equation_id;
       for (size_t i = 0; i < bifurcations.size(); ++i)
       {
         const auto& local_dof_ids = bifurcations.local_dof_ids[i];
-        double res = locally_relevant_dofs
-                         .local_values_as_span()[local_dof_ids[BifurcationData::p_out_parent]] -
-                     locally_relevant_dofs
-                         .local_values_as_span()[local_dof_ids[BifurcationData::p_in_child_1]];
-        rhs.replace_local_value(bifurcations.first_local_equation_id[i], res);
+        double res = dof_values[local_dof_ids[BifurcationData::p_out_parent]] -
+                     dof_values[local_dof_ids[BifurcationData::p_in_child_1]];
+        residual_values[static_cast<std::size_t>(bifurcation_equation_id[i])] = res;
 
-        res = locally_relevant_dofs
-                  .local_values_as_span()[local_dof_ids[BifurcationData::p_out_parent]] -
-              locally_relevant_dofs
-                  .local_values_as_span()[local_dof_ids[BifurcationData::p_in_child_2]];
-        rhs.replace_local_value(bifurcations.first_local_equation_id[i] + 1, res);
+        res = dof_values[local_dof_ids[BifurcationData::p_out_parent]] -
+              dof_values[local_dof_ids[BifurcationData::p_in_child_2]];
+        residual_values[static_cast<std::size_t>(bifurcation_equation_id[i] + 1)] = res;
 
-        res = locally_relevant_dofs
-                  .local_values_as_span()[local_dof_ids[BifurcationData::q_out_parent]] -
-              locally_relevant_dofs
-                  .local_values_as_span()[local_dof_ids[BifurcationData::q_in_child_1]] -
-              locally_relevant_dofs
-                  .local_values_as_span()[local_dof_ids[BifurcationData::q_in_child_2]];
-        rhs.replace_local_value(bifurcations.first_local_equation_id[i] + 2, res);
+        res = dof_values[local_dof_ids[BifurcationData::q_out_parent]] -
+              dof_values[local_dof_ids[BifurcationData::q_in_child_1]] -
+              dof_values[local_dof_ids[BifurcationData::q_in_child_2]];
+        residual_values[static_cast<std::size_t>(bifurcation_equation_id[i] + 2)] = res;
       }
     }
 
