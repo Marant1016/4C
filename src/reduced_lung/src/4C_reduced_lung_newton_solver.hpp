@@ -76,6 +76,11 @@ namespace ReducedLung
      */
     unsigned int solve(double time);
 
+    /**
+     * @brief Final residual norm from the most recent nonlinear solve.
+     */
+    [[nodiscard]] double last_residual_norm() const { return last_residual_norm_; }
+
    private:
     void sync_state_from_x(const Core::LinAlg::Vector<double>& x);
 
@@ -101,6 +106,7 @@ namespace ReducedLung
 
     double dt_;
     double current_time_;
+    double last_residual_norm_ = 0.0;
     unsigned int max_nonlinear_iterations_;
     double nonlinear_residual_tolerance_;
     double nonlinear_increment_tolerance_;

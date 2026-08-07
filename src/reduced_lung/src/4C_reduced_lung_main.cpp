@@ -37,10 +37,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 
 
@@ -95,6 +97,22 @@ namespace ReducedLung
              setting != "off" && setting != "OFF";
     }
 
+    const char* nonlinear_solver_name(ReducedLungParameters::NonlinearSolverType solver)
+    {
+      using SolverType = ReducedLungParameters::NonlinearSolverType;
+      switch (solver)
+      {
+        case SolverType::Nox:
+          return "NOX";
+        case SolverType::NewtonSparse:
+          return "NewtonSparse";
+        case SolverType::NewtonTree:
+          return "NewtonTree";
+      }
+
+      return "Unknown";
+    }
+
     class ReducedLungSimulation
     {
      public:
@@ -125,6 +143,8 @@ namespace ReducedLung
         if (Core::Communication::my_mpi_rank(comm_) == 0)
         {
           std::cout << "-------- Start Time Integration --------\n"
+                    << "Reduced lung nonlinear solver: "
+                    << nonlinear_solver_name(context_.parameters.dynamics.nonlinear_solver) << "\n"
                     << "----------------------------------------\n"
                     << std::flush;
         }
@@ -375,13 +395,6 @@ namespace ReducedLung
 
       void solve_timestep(int step)
       {
-        if (Core::Communication::my_mpi_rank(comm_) == 0)
-        {
-          std::cout << "Timestep: " << step << "/" << n_timesteps_
-                    << "\n----------------------------------------\n"
-                    << std::flush;
-        }
-
         FOUR_C_ASSERT_ALWAYS(nox_solver_ != nullptr || newton_solver_ != nullptr,
             "Reduced lung solver must be initialized before time integration.");
         FOUR_C_ASSERT_ALWAYS(locally_relevant_dofs_ != nullptr,
@@ -394,11 +407,27 @@ namespace ReducedLung
             boundary_conditions_, terminal_units_, comm_);
         if (nox_solver_ != nullptr)
         {
+          if (Core::Communication::my_mpi_rank(comm_) == 0)
+          {
+            std::cout << "Timestep: " << step << "/" << n_timesteps_
+                      << "\n----------------------------------------\n"
+                      << std::flush;
+          }
           nox_solver_->solve(current_time_);
         }
         else
         {
-          newton_solver_->solve(current_time_);
+          const unsigned int iterations = newton_solver_->solve(current_time_);
+          if (Core::Communication::my_mpi_rank(comm_) == 0)
+          {
+            std::ostringstream residual_norm;
+            residual_norm << std::scientific << std::setprecision(2)
+                          << newton_solver_->last_residual_norm();
+            std::cout << "Timestep " << step << "/" << n_timesteps_
+                      << " | Newton iters: " << iterations << " | ||F||: " << residual_norm.str()
+                      << "\n"
+                      << std::flush;
+          }
         }
 
         TerminalUnits::end_of_timestep_routine(terminal_units_, *locally_relevant_dofs_, dt_);

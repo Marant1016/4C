@@ -166,15 +166,16 @@ namespace ReducedLung
         profile_->state_sync_time += elapsed_seconds(sync_start);
       }
       const double residual_norm = assemble_residual_for_current_state();
+      last_residual_norm_ = residual_norm;
       if (profile_ != nullptr)
       {
         profile_->last_residual_norms.push_back(residual_norm);
       }
       const bool residual_converged = residual_norm <= nonlinear_residual_tolerance_;
-      const bool increment_converged =
-          iteration == 0 || increment_norm <= nonlinear_increment_tolerance_;
 
-      if (residual_converged && increment_converged)
+      // The residual is the authoritative convergence check. A large first correction is expected
+      // when advancing in time, even for linear systems.
+      if (residual_converged)
       {
         if (profile_ != nullptr)
         {
@@ -183,6 +184,14 @@ namespace ReducedLung
           ++profile_->solve_count;
         }
         return iteration;
+      }
+
+      if (iteration > 0 && increment_norm <= nonlinear_increment_tolerance_)
+      {
+        FOUR_C_THROW(
+            "ReducedLung::NewtonSolver stagnated at time {} after {} Newton corrections. "
+            "Residual norm: {}, increment norm: {}.",
+            current_time_, iteration, residual_norm, increment_norm);
       }
 
       if (iteration == max_nonlinear_iterations_)
