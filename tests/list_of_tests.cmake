@@ -1572,18 +1572,12 @@ four_c_test(TEST_FILE reduced_lung_aw_bifurcation_flow.4C.yaml REQUIRED_DEPENDEN
 four_c_test(TEST_FILE reduced_lung_aw_bifurcation_flow_newton_sparse.4C.yaml REQUIRED_DEPENDENCIES VTK)
 four_c_test(TEST_FILE reduced_lung_aw_bifurcation_flow_newton_tree.4C.yaml REQUIRED_DEPENDENCIES VTK)
 four_c_test(TEST_FILE reduced_lung_aw_bifurcation_flow.4C.yaml NP 2 REQUIRED_DEPENDENCIES VTK)
-four_c_test(
-        TEST_FILE reduced_lung_distributed_bifurcation_newton_tree.4C.yaml NP 2 REQUIRED_DEPENDENCIES VTK
-)
 four_c_test(TEST_FILE reduced_lung_lung_tree_gen10_nox.4C.yaml TIMEOUT 240 REQUIRED_DEPENDENCIES VTK)
 four_c_test(
         TEST_FILE reduced_lung_lung_tree_gen10_newton_sparse.4C.yaml TIMEOUT 240 REQUIRED_DEPENDENCIES VTK
 )
 four_c_test(
         TEST_FILE reduced_lung_lung_tree_gen10_newton_tree.4C.yaml TIMEOUT 240 REQUIRED_DEPENDENCIES VTK
-)
-four_c_test(
-        TEST_FILE reduced_lung_lung_tree_gen10_newton_tree.4C.yaml NP 2 TIMEOUT 240 REQUIRED_DEPENDENCIES VTK
 )
 four_c_test(TEST_FILE reduced_lung_3_aw_2_tu.4C.yaml REQUIRED_DEPENDENCIES VTK)
 four_c_test(TEST_FILE reduced_lung_3_aw_2_tu_newton_sparse.4C.yaml REQUIRED_DEPENDENCIES VTK)

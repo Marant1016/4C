@@ -73,7 +73,6 @@ namespace ReducedLung
     double top_down_time = 0.0;
     double dense_solve_time = 0.0;
     double coefficient_lookup_time = 0.0;
-    double communication_time = 0.0;
     unsigned int solve_count = 0;
     std::uint64_t dense_solve_count = 0;
     std::uint64_t coefficient_lookup_count = 0;
@@ -83,12 +82,6 @@ namespace ReducedLung
     std::uint64_t scalar_tail_lane_count = 0;
     std::uint64_t dense_fallback_count = 0;
     std::uint64_t unsupported_block_fallback_count = 0;
-    std::uint64_t communicated_coefficient_count = 0;
-    std::uint64_t communicated_residual_count = 0;
-    std::uint64_t boundary_relation_message_count = 0;
-    std::uint64_t boundary_pressure_message_count = 0;
-    std::uint64_t correction_scatter_message_count = 0;
-    std::uint64_t communication_bytes = 0;
     std::uint64_t element_count = 0;
     std::uint64_t total_local_block_dofs = 0;
     int max_local_block_size = 0;

@@ -21,7 +21,6 @@
 #include "4C_rebalance.hpp"
 #include "4C_reduced_lung_airways.hpp"
 #include "4C_reduced_lung_boundary_conditions.hpp"
-#include "4C_reduced_lung_distributed_tree_linear_solver.hpp"
 #include "4C_reduced_lung_helpers.hpp"
 #include "4C_reduced_lung_input.hpp"
 #include "4C_reduced_lung_junctions.hpp"
@@ -341,6 +340,14 @@ namespace ReducedLung
         MPI_Comm_size(comm_, &comm_size);
         FOUR_C_ASSERT_ALWAYS(row_map_ != nullptr && locally_relevant_dof_map_ != nullptr,
             "Reduced lung maps must be initialized before tree Newton solver setup.");
+        if (comm_size != 1)
+        {
+          FOUR_C_THROW(
+              "Reduced lung NewtonTree is serial-only, but the run uses {} MPI ranks. Run "
+              "NewtonTree with one MPI rank, or select nonlinear_solver: NewtonSparse or Nox "
+              "for MPI runs.",
+              comm_size);
+        }
 
         tree_metadata_ = build_reduced_lung_tree_metadata(ReducedLungTreeMetadataContext{
             .parameters = context_.parameters,
@@ -354,21 +361,10 @@ namespace ReducedLung
             .row_map = *row_map_,
             .locally_relevant_dof_map = *locally_relevant_dof_map_,
         });
-        if (comm_size == 1)
-        {
-          newton_linear_solver_ = std::make_shared<TreeNewtonLinearSolver>(
-              TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_,
-                  .coefficient_source =
-                      TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks,
-                  .profile = tree_profile_enabled_ ? &tree_profile_ : nullptr});
-        }
-        else
-        {
-          newton_linear_solver_ = std::make_shared<DistributedTreeNewtonLinearSolver>(
-              DistributedTreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_,
-                  .locally_relevant_dof_map = *locally_relevant_dof_map_,
-                  .profile = tree_profile_enabled_ ? &tree_profile_ : nullptr});
-        }
+        newton_linear_solver_ = std::make_shared<TreeNewtonLinearSolver>(
+            TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_,
+                .coefficient_source = TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks,
+                .profile = tree_profile_enabled_ ? &tree_profile_ : nullptr});
         build_newton_solver();
       }
 
