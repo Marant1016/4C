@@ -14,7 +14,7 @@
 #include "4C_reduced_lung_boundary_conditions.hpp"
 #include "4C_reduced_lung_helpers.hpp"
 #include "4C_reduced_lung_junctions.hpp"
-#include "4C_reduced_lung_linear_solver.hpp"
+#include "4C_reduced_lung_newton_linear_solver.hpp"
 #include "4C_reduced_lung_newton_solver.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
 #include "4C_utils_function_manager.hpp"

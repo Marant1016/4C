@@ -7,6 +7,8 @@
 
 #include <gtest/gtest.h>
 
+#include "4C_reduced_lung_distributed_tree_linear_solver.hpp"
+
 #include "4C_fem_discretization.hpp"
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_utils_sparse_algebra_manipulation.hpp"
@@ -16,7 +18,7 @@
 #include "4C_reduced_lung_boundary_conditions.hpp"
 #include "4C_reduced_lung_helpers.hpp"
 #include "4C_reduced_lung_junctions.hpp"
-#include "4C_reduced_lung_linear_solver.hpp"
+#include "4C_reduced_lung_newton_linear_solver.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
 #include "4C_reduced_lung_tree_linear_solver.hpp"
 #include "4C_reduced_lung_tree_linearization.hpp"

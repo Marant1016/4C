@@ -11,7 +11,7 @@
 #include "4C_config.hpp"
 
 #include "4C_reduced_lung_helpers.hpp"
-#include "4C_reduced_lung_linear_solver.hpp"
+#include "4C_reduced_lung_newton_linear_solver.hpp"
 #include "4C_reduced_lung_tree_linearization.hpp"
 
 #include <memory>

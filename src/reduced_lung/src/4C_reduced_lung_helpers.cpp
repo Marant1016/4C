@@ -25,7 +25,7 @@
 #include "4C_reduced_lung_airways.hpp"
 #include "4C_reduced_lung_airways_model_registry.hpp"
 #include "4C_reduced_lung_input.hpp"
-#include "4C_reduced_lung_solver_profile.hpp"
+#include "4C_reduced_lung_solver_profiles.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
 #include "4C_reduced_lung_terminal_unit_model_registry.hpp"
 #include "4C_reduced_lung_tree_linearization.hpp"

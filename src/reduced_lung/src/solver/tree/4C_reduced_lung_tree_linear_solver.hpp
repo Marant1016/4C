@@ -10,7 +10,7 @@
 
 #include "4C_config.hpp"
 
-#include "4C_reduced_lung_linear_solver.hpp"
+#include "4C_reduced_lung_newton_linear_solver.hpp"
 #include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_reduced_lung_tree_metadata.hpp"
 
@@ -59,17 +59,6 @@ namespace ReducedLung
     TreeNewtonLinearSolverProfile* profile = nullptr;
     bool force_batch_tree_solve = false;
     bool error_on_dense_fallback = false;
-  };
-
-  /**
-   * @brief Context for the distributed structured-tree Newton correction solver.
-   */
-  struct DistributedTreeNewtonLinearSolverContext
-  {
-    const ReducedLungTreeMetadata& tree_metadata;
-    const Core::LinAlg::Map& locally_relevant_dof_map;
-    double pivot_tolerance = 1.0e-12;
-    TreeNewtonLinearSolverProfile* profile = nullptr;
   };
 
   /**
@@ -242,84 +231,6 @@ namespace ReducedLung
     int current_solve_stamp_ = 0;
   };
 
-  /**
-   * @brief MPI-capable structured-tree Newton correction solver.
-   *
-   * This implementation performs bottom-up and top-down work on the ranks that own tree elements,
-   * exchanging only condensed child-subtree relations, inlet-pressure corrections, and final
-   * correction values across rank boundaries.
-   */
-  class DistributedTreeNewtonLinearSolver : public NewtonLinearSolver
-  {
-   public:
-    explicit DistributedTreeNewtonLinearSolver(
-        const DistributedTreeNewtonLinearSolverContext& context);
-
-    [[nodiscard]] NewtonLinearizationType linearization_type() const override;
-
-    void set_tree_linearization(const TreeLinearization& tree_linearization) override;
-
-    void solve(Core::LinAlg::SparseMatrix& jacobian, const Core::LinAlg::Vector<double>& residual,
-        const Core::LinAlg::Vector<double>& x, const NewtonLinearSystemMetadata& metadata,
-        Core::LinAlg::Vector<double>& delta) override;
-
-   private:
-    struct SubtreeRelation
-    {
-      double G = 0.0;
-      double h = 0.0;
-    };
-
-    struct ChildInterfacePlan
-    {
-      int child_element_index = -1;
-      int pressure_global_row = -1;
-      int parent_outlet_pressure_global_dof = -1;
-      int child_inlet_pressure_global_dof = -1;
-      int child_inlet_flow_global_dof = -1;
-      int parent_outlet_pressure_unknown_index = -1;
-    };
-
-    struct ElementSolvePlan
-    {
-      int element_index = -1;
-      int global_element_id = -1;
-      int inlet_pressure_global_dof = -1;
-      int inlet_flow_unknown_index = -1;
-      bool is_leaf = false;
-      std::vector<int> unknown_global_dof_ids;
-      std::vector<int> equation_global_rows;
-      std::vector<ChildInterfacePlan> child_interfaces;
-      std::string context;
-    };
-
-    struct ElementWorkspace
-    {
-      std::vector<std::vector<double>> matrix;
-      std::vector<double> rhs_constant;
-      std::vector<double> rhs_inlet_pressure;
-      std::vector<double> intercept;
-      std::vector<double> slope;
-      std::vector<double> child_pressure_slope;
-      std::vector<double> child_pressure_intercept;
-    };
-
-    void build_symbolic_plan();
-
-    MPI_Comm comm_ = MPI_COMM_NULL;
-    const ReducedLungTreeMetadata& tree_metadata_;
-    const Core::LinAlg::Map& locally_relevant_dof_map_;
-    double pivot_tolerance_ = 1.0e-12;
-    const TreeLinearization* tree_linearization_ = nullptr;
-    TreeNewtonLinearSolverProfile* profile_ = nullptr;
-
-    int root_boundary_global_row_ = -1;
-    int root_inlet_pressure_global_dof_ = -1;
-    std::vector<ElementSolvePlan> element_plans_;
-    std::vector<ElementWorkspace> element_workspaces_;
-    std::vector<SubtreeRelation> subtree_relations_;
-    std::vector<double> inlet_pressure_by_element_;
-  };
 }  // namespace ReducedLung
 
 FOUR_C_NAMESPACE_CLOSE

@@ -7,12 +7,12 @@
 
 #include "4C_config.hpp"
 
-#include "4C_reduced_lung_linear_solver.hpp"
+#include "4C_reduced_lung_newton_linear_solver.hpp"
 
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_vector.hpp"
 #include "4C_linear_solver_method_linalg.hpp"
-#include "4C_reduced_lung_solver_profile.hpp"
+#include "4C_reduced_lung_solver_profiles.hpp"
 #include "4C_utils_exceptions.hpp"
 #include "4C_utils_shared_ptr_from_ref.hpp"
 

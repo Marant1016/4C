@@ -13,7 +13,7 @@
 #include "4C_linalg_sparsematrix.hpp"
 #include "4C_linalg_utils_sparse_algebra_manipulation.hpp"
 #include "4C_linalg_vector.hpp"
-#include "4C_reduced_lung_solver_profile.hpp"
+#include "4C_reduced_lung_solver_profiles.hpp"
 #include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_utils_exceptions.hpp"
 
