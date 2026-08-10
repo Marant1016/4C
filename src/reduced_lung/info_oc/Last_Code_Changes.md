@@ -131,6 +131,28 @@ NewtonTree   optimized custom Newton workflow with serial tree linear solver bac
 
 `Nox` remains the safe default. `NewtonTree` remains an explicit opt-in path for serial performance runs.
 
+## Relocated Test Inputs
+
+The reduced-lung input files that were created for the custom Newton workflow but are not part of
+the original upstream `tests/input_files/` set have been moved out of the 4C test-input directory.
+
+They are now kept as a clean, self-contained archive in:
+
+```text
+/scratch/Rodriguez/workspace/4C/files/unit_tests/
+```
+
+This folder includes the moved `NewtonSparse`, `NewtonTree`, and generated gen10 reduced-lung YAML
+inputs, plus the supporting `*_fields.json` files needed by their relative `from_file` references.
+
+The corresponding `four_c_test(...)` registrations were removed from:
+
+```text
+tests/list_of_tests.cmake
+```
+
+so CTest no longer expects those files under `tests/input_files/`.
+
 ## Validation To Run
 
 After this cleanup, run:
