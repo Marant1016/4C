@@ -153,6 +153,32 @@ tests/list_of_tests.cmake
 
 so CTest no longer expects those files under `tests/input_files/`.
 
+## Relocated GoogleTests and Benchmarks
+
+The reduced-lung GoogleTest source files created during the custom Newton/NewtonTree work were moved
+out of the auto-discovered 4C test tree and archived in:
+
+```text
+/scratch/Rodriguez/workspace/4C/files/google_tests/reduced_lung/
+```
+
+This includes the Newton solver, Newton-vs-NOX, tree metadata, tree linear solver, and input-pipeline
+test sources. The distributed `.np2` Newton test sources were archived there as well because
+`NewtonTree` is now serial-only and distributed NewtonTree tests would be misleading.
+
+The generated gen16 benchmark inputs are kept in:
+
+```text
+/scratch/Rodriguez/workspace/4C/files/gen16_inputs/
+```
+
+The benchmark scripts and historical benchmark outputs are kept in:
+
+```text
+/scratch/Rodriguez/workspace/4C/files/benchmarks/scripts/
+/scratch/Rodriguez/workspace/4C/files/benchmarks/results/
+```
+
 ## Validation To Run
 
 After this cleanup, run:
@@ -167,7 +193,7 @@ ctest -R "^reduced_lung_.*newton_.*\.4C\.yaml-p1$" --output-on-failure
 For large end-to-end benchmarking, the currently used generated-tree scripts remain independent of the removed Google Benchmark sources:
 
 ```text
-RUNS=3 ../files/benchmark_reduced_lung_gen16_linear_newton_tree.sh
-RUNS=3 ../files/benchmark_reduced_lung_gen16_nonlinear_newton_tree.sh
-RUNS=3 ../files/benchmark_reduced_lung_gen16_solvers.sh
+RUNS=3 /scratch/Rodriguez/workspace/4C/files/benchmarks/scripts/benchmark_reduced_lung_gen16_linear_newton_tree.sh
+RUNS=3 /scratch/Rodriguez/workspace/4C/files/benchmarks/scripts/benchmark_reduced_lung_gen16_nonlinear_newton_tree.sh
+RUNS=3 /scratch/Rodriguez/workspace/4C/files/benchmarks/scripts/benchmark_reduced_lung_gen16_solvers.sh
 ```
