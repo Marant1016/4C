@@ -26,7 +26,10 @@
 #include <string>
 #include <vector>
 
-#if defined(__has_include)
+#if defined(FOUR_C_REDUCED_LUNG_FORCE_SCALAR_TREE_SOLVER) && \
+    FOUR_C_REDUCED_LUNG_FORCE_SCALAR_TREE_SOLVER
+#define FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD 0
+#elif defined(__has_include)
 #if __has_include(<experimental/simd>)
 #include <experimental/simd>
 #define FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD 1
