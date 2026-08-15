@@ -166,6 +166,59 @@ This includes the Newton solver, Newton-vs-NOX, tree metadata, tree linear solve
 test sources. The distributed `.np2` Newton test sources were archived there as well because
 `NewtonTree` is now serial-only and distributed NewtonTree tests would be misleading.
 
+## Restored Solver GoogleTests
+
+The main custom Newton and serial tree-solver GoogleTests have been restored into the active
+auto-discovered reduced-lung test folder:
+
+```text
+src/reduced_lung/tests/4C_reduced_lung_newton_solver_test.np2.cpp
+src/reduced_lung/tests/4C_reduced_lung_tree_metadata_test.cpp
+src/reduced_lung/tests/4C_reduced_lung_tree_linear_solver_test.cpp
+```
+
+The restored coverage verifies:
+
+```text
+NewtonSparse custom Newton workflow on an analytical terminal-unit problem
+tree metadata construction and validation invariants
+TreeNewtonLinearSolver corrections against the sparse Newton linear solver
+structured tree coefficient assembly against the generic structured path
+small NewtonTree workflows against NOX and NewtonSparse reference workflows
+```
+
+These tests intentionally live in the flat `src/reduced_lung/tests/` directory to match the current
+`four_c_auto_define_tests()` layout used by the existing reduced-lung unit tests.
+
+## Restored Runtime Input Smoke Tests
+
+Four small reduced-lung runtime input tests have been restored into the active input-file test set:
+
+```text
+tests/input_files/reduced_lung_terminal_unit_newton_sparse.4C.yaml
+tests/input_files/reduced_lung_terminal_unit_newton_tree.4C.yaml
+tests/input_files/reduced_lung_aw_bifurcation_flow_newton_sparse.4C.yaml
+tests/input_files/reduced_lung_aw_bifurcation_flow_newton_tree.4C.yaml
+```
+
+They reuse the existing supporting field files:
+
+```text
+tests/input_files/reduced_lung_terminal_unit_fields.json
+tests/input_files/reduced_lung_aw_bifurcation_fields.json
+```
+
+The tests are registered in:
+
+```text
+tests/list_of_tests.cmake
+```
+
+These are intentionally lightweight serial smoke tests. Their role is to verify that real `.4C.yaml`
+inputs select and execute `nonlinear_solver: NewtonSparse` and `nonlinear_solver: NewtonTree` through
+the normal 4C runtime input pipeline. Deeper solver correctness remains covered by the restored
+GoogleTests in `src/reduced_lung/tests/`.
+
 The generated gen16 benchmark inputs are kept in:
 
 ```text

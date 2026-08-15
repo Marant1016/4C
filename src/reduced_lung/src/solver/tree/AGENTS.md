@@ -45,5 +45,6 @@
 
 - For numerical changes, compare tree corrections against sparse corrections on small cases before relying on large tree benchmarks.
 - Useful builds from the source root include `cmake --build build/debug --target reduced_lung_objs --parallel 4` and reduced-lung unit test targets when available.
-- Useful tests include `ctest -R "^unittests_reduced_lung(\.np2)?$" --output-on-failure` and registered `NewtonTree` reduced-lung input tests.
+- Tree-specific GoogleTests live in `src/reduced_lung/tests/4C_reduced_lung_tree_metadata_test.cpp` and `src/reduced_lung/tests/4C_reduced_lung_tree_linear_solver_test.cpp`; they are run through `ctest -R "^unittests_reduced_lung$" --output-on-failure` or the broader `ctest -R "^unittests_reduced_lung(\.np2)?$" --output-on-failure`.
+- Runtime `NewtonTree` input smoke tests live in `tests/input_files/reduced_lung_terminal_unit_newton_tree.4C.yaml` and `tests/input_files/reduced_lung_aw_bifurcation_flow_newton_tree.4C.yaml`; run them with `ctest -R "newton_tree" --output-on-failure`.
 - For performance runs, use a release executable, keep `NewtonTree` serial, and enable `FOUR_C_REDUCED_LUNG_TREE_PROFILE=1` when profiling tree phases.

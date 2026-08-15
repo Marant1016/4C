@@ -42,5 +42,8 @@
 
 - Prefer targeted builds from the 4C source root, for example `cmake --build build/debug --target reduced_lung_objs --parallel 4`.
 - For behavior changes, compare `NewtonSparse` against the existing NOX path or compare `NewtonTree` against `NewtonSparse` on small cases when practical.
-- Useful targeted tests include `ctest -R "^unittests_reduced_lung(\.np2)?$" --output-on-failure` and registered reduced-lung input tests matching the changed solver path.
+- Solver-focused GoogleTests live in `src/reduced_lung/tests/4C_reduced_lung_newton_solver_test.np2.cpp`, `src/reduced_lung/tests/4C_reduced_lung_tree_metadata_test.cpp`, and `src/reduced_lung/tests/4C_reduced_lung_tree_linear_solver_test.cpp`.
+- Useful targeted C++ unit tests are `ctest -R "^unittests_reduced_lung(\.np2)?$" --output-on-failure`.
+- Lightweight runtime input smoke tests for real `.4C.yaml` solver selection are `reduced_lung_terminal_unit_newton_sparse.4C.yaml`, `reduced_lung_terminal_unit_newton_tree.4C.yaml`, `reduced_lung_aw_bifurcation_flow_newton_sparse.4C.yaml`, and `reduced_lung_aw_bifurcation_flow_newton_tree.4C.yaml` under `tests/input_files/`.
+- Run those runtime smoke tests with `ctest -R "reduced_lung_.*newton" --output-on-failure` when changing runtime solver construction or input selection.
 - If local dependencies or build directories are unavailable, state the verification gap clearly.
