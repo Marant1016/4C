@@ -410,6 +410,8 @@ namespace ReducedLung
     void update_tree_linearization(TreeCoefficientAssemblyTarget& target,
         const ConnectionData& connections, const BifurcationData& bifurcations)
     {
+      /* Junction equations are linear and state-independent; only constant coefficients are stored.
+       */
       for (size_t i = 0; i < connections.size(); ++i)
       {
         const auto& local_dof_ids = connections.local_dof_ids[i];

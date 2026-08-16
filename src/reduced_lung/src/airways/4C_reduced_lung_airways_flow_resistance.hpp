@@ -119,24 +119,36 @@ namespace ReducedLung::Airways::FlowResistance
 
   /**
    * @brief Evaluator type for flow-resistance values.
+   *
+   * The evaluator writes into caller-owned scratch storage to avoid temporary allocations during
+   * repeated residual/Jacobian/tree assembly.
    */
   using FlowResistanceEvaluator = std::function<void(const AirwayData&,
       const Core::LinAlg::Vector<double>&, const std::vector<double>&, std::span<double>)>;
 
   /**
    * @brief Evaluator type for flow-resistance derivative in rigid-wall equations.
+   *
+   * Results are written into the supplied span and later used as dynamic q-coefficients in sparse
+   * and structured airway linearizations.
    */
   using FlowResistanceDerivativeEvaluatorRigid = std::function<void(
       const AirwayData&, const Core::LinAlg::Vector<double>&, double, std::span<double>)>;
 
   /**
    * @brief Evaluator type for flow-resistance derivatives in Kelvin-Voigt wall equations.
+   *
+   * Writes q1 and q2 derivatives into caller-owned spans for batched structured coefficient
+   * replacement.
    */
   using FlowResistanceDerivativeEvaluatorKelvinVoigt = std::function<void(const AirwayData&,
       const Core::LinAlg::Vector<double>&, double, std::span<double>, std::span<double>)>;
 
   /**
    * @brief Evaluator type for inertia derivatives in Kelvin-Voigt wall equations.
+   *
+   * Writes q1 and q2 inertia derivatives into caller-owned spans for sparse and structured airway
+   * linearization assembly.
    */
   using InertiaDerivativeEvaluatorKelvinVoigt = std::function<void(const AirwayData&,
       const Core::LinAlg::Vector<double>&, double, std::span<double>, std::span<double>)>;

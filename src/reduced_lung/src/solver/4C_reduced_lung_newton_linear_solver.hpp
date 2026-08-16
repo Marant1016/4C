@@ -38,15 +38,18 @@ namespace ReducedLung
    */
   struct NewtonLinearSystemMetadata
   {
-    double current_time = 0.0;
-    double time_step_size_dt = 0.0;
-    unsigned int nonlinear_iteration = 0;
+    double current_time = 0.0;             ///< Current physical time.
+    double time_step_size_dt = 0.0;        ///< Time-step size.
+    unsigned int nonlinear_iteration = 0;  ///< Current Newton iteration index.
   };
 
+  /**
+   * @brief Linearization storage requested by a Newton correction solver.
+   */
   enum class NewtonLinearizationType
   {
-    SparseJacobian,
-    StructuredTreeBlocks,
+    SparseJacobian,        ///< Assemble and solve with a sparse Jacobian matrix.
+    StructuredTreeBlocks,  ///< Assemble structured blocks for tree-based solvers.
   };
 
   /**
@@ -55,18 +58,37 @@ namespace ReducedLung
   class NewtonLinearSolver
   {
    public:
+    /**
+     * @brief Destroy the Newton linear solver interface.
+     */
     virtual ~NewtonLinearSolver() = default;
 
+    /**
+     * @brief Return the linearization representation required by this solver.
+     *
+     * @return Requested Newton linearization type.
+     */
     [[nodiscard]] virtual NewtonLinearizationType linearization_type() const
     {
       return NewtonLinearizationType::SparseJacobian;
     }
 
+    /**
+     * @brief Provide structured tree-linearization data to solvers that consume it.
+     *
+     * @param tree_linearization Structured tree coefficients assembled for the current Newton
+     * state.
+     */
     virtual void set_tree_linearization(const TreeLinearization& tree_linearization)
     {
       (void)tree_linearization;
     }
 
+    /**
+     * @brief Return a direct tree-coefficient target for solvers that own optimized storage.
+     *
+     * @return Target for direct coefficient assembly, or nullptr if not supported.
+     */
     [[nodiscard]] virtual TreeCoefficientAssemblyTarget* direct_tree_coefficient_target()
     {
       return nullptr;
@@ -77,6 +99,12 @@ namespace ReducedLung
      *
      * Sign convention: solve `jacobian * delta = -residual`. The nonlinear solver then applies
      * `x = x + delta`.
+     *
+     * @param jacobian Sparse Jacobian matrix for sparse correction solvers.
+     * @param residual Residual vector for the current nonlinear state.
+     * @param x Current nonlinear solution vector.
+     * @param metadata Current time-step and Newton-iteration metadata.
+     * @param delta Output Newton correction vector.
      */
     virtual void solve(Core::LinAlg::SparseMatrix& jacobian,
         const Core::LinAlg::Vector<double>& residual, const Core::LinAlg::Vector<double>& x,
@@ -88,11 +116,12 @@ namespace ReducedLung
    */
   struct SparseNewtonLinearSolverContext
   {
-    MPI_Comm comm;
-    const Teuchos::ParameterList& linear_solver_parameters;
-    std::function<const Teuchos::ParameterList&(int)> solver_params_callback;
-    const Core::LinAlg::Map& correction_map;
-    SparseNewtonLinearSolverProfile* profile = nullptr;
+    MPI_Comm comm;  ///< MPI communicator used by the sparse linear solver.
+    const Teuchos::ParameterList& linear_solver_parameters;  ///< Linear solver configuration.
+    std::function<const Teuchos::ParameterList&(int)>
+        solver_params_callback;               ///< Callback for nested/ID-based solver parameters.
+    const Core::LinAlg::Map& correction_map;  ///< Map for residual, right-hand side, and delta.
+    SparseNewtonLinearSolverProfile* profile = nullptr;  ///< Optional benchmark profile sink.
   };
 
   /**
@@ -101,8 +130,22 @@ namespace ReducedLung
   class SparseNewtonLinearSolver : public NewtonLinearSolver
   {
    public:
+    /**
+     * @brief Construct the sparse Newton linear solver.
+     *
+     * @param context Sparse linear solver setup and correction vector map.
+     */
     explicit SparseNewtonLinearSolver(const SparseNewtonLinearSolverContext& context);
 
+    /**
+     * @brief Solve one sparse Newton correction system.
+     *
+     * @param jacobian Sparse Jacobian matrix.
+     * @param residual Residual vector for the current nonlinear state.
+     * @param x Current nonlinear solution vector.
+     * @param metadata Current time-step and Newton-iteration metadata.
+     * @param delta Output Newton correction vector.
+     */
     void solve(Core::LinAlg::SparseMatrix& jacobian, const Core::LinAlg::Vector<double>& residual,
         const Core::LinAlg::Vector<double>& x, const NewtonLinearSystemMetadata& metadata,
         Core::LinAlg::Vector<double>& delta) override;

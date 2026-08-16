@@ -87,6 +87,7 @@ namespace ReducedLung::Airways::FlowResistance
         const AirwayData& data, const Core::LinAlg::Vector<double>& locally_relevant_dofs,
         double dt, std::span<double> resistance_derivative)
     {
+      /* Fill caller-owned scratch directly; these values become rigid-airway q coefficients. */
       (void)dt;
       assert_output_size(
           resistance_derivative, data.number_of_elements(), "Rigid flow-resistance derivative");
@@ -123,6 +124,7 @@ namespace ReducedLung::Airways::FlowResistance
         const std::vector<double>& area, double dt, std::span<double> resistance_derivative_q1,
         std::span<double> resistance_derivative_q2)
     {
+      /* Kelvin-Voigt derivatives are produced in q1/q2 batches for structured replacement. */
       (void)model;
       FOUR_C_ASSERT_ALWAYS(area.size() == data.number_of_elements(),
           "Airway area vector has {} entries but expected {}.", area.size(),

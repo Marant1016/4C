@@ -157,6 +157,9 @@ namespace ReducedLung
       return std::chrono::duration<double>(Clock::now() - start).count();
     }
 
+    /**
+     * Coefficient provider for the validation path using a completed sparse Jacobian.
+     */
     class SparseTreeCoefficientProvider
     {
      public:
@@ -219,6 +222,9 @@ namespace ReducedLung
       TreeNewtonLinearSolverProfile* profile_ = nullptr;
     };
 
+    /**
+     * Coefficient provider for row-oriented TreeLinearization storage.
+     */
     class StructuredTreeCoefficientProvider
     {
      public:
@@ -291,6 +297,9 @@ namespace ReducedLung
       TreeNewtonLinearSolverProfile* profile_ = nullptr;
     };
 
+    /**
+     * Coefficient provider for the fast path where physics modules write directly into solver SoA.
+     */
     class DirectTreeCoefficientProvider
     {
      public:
@@ -424,6 +433,9 @@ namespace ReducedLung
       return value;
     }
 
+    /**
+     * Solve one dense local block for two right-hand sides: constant term and inlet-pressure slope.
+     */
     void solve_dense_system(double* matrix, double* rhs_a, double* rhs_b, double* solution_a,
         double* solution_b, int n, double pivot_tolerance, const std::string& context)
     {
@@ -494,6 +506,9 @@ namespace ReducedLung
       }
     }
 
+    /**
+     * Solve a batch of 2x2 local blocks, using SIMD when available and dense fallback if needed.
+     */
     void solve_2x2_batch(int group_begin, int group_end,
         const std::vector<int>& grouped_element_indices, std::vector<double>& a00,
         std::vector<double>& a01, std::vector<double>& a10, std::vector<double>& a11,
@@ -676,6 +691,9 @@ namespace ReducedLung
       }
     }
 
+    /**
+     * Solve a batch of 3x3 local blocks, using SIMD when available and dense fallback if needed.
+     */
     void solve_3x3_batch(int group_begin, int group_end,
         const std::vector<int>& grouped_element_indices, std::vector<double>& a00,
         std::vector<double>& a01, std::vector<double>& a02, std::vector<double>& a10,
@@ -1037,6 +1055,8 @@ namespace ReducedLung
       profile_->max_local_block_size = 0;
     }
 
+    // The tree solve treats each element inlet pressure as the external variable and solves the
+    // remaining element dofs as a local dense block parameterized by that inlet pressure.
     int matrix_entry_count = 0;
     for (std::size_t element_index = 0; element_index < tree_metadata_.elements.size();
         ++element_index)
@@ -1201,6 +1221,8 @@ namespace ReducedLung
       const char* context = nullptr;
     };
 
+    // Direct assembly is indexed by row first, then dof, so physics callbacks can update the SoA
+    // coefficient storage without searching all coefficients used by the symbolic plan.
     std::vector<PendingDirectCoefficientEntry> pending_direct_coefficients;
     pending_direct_coefficients.reserve(
         1 + equation_inlet_pressure_coefficients_.size() + matrix_coefficients_.size() +
@@ -1292,6 +1314,8 @@ namespace ReducedLung
     grouped_child_begin_.clear();
     bottom_up_layer_groups_.clear();
     top_down_layer_groups_.clear();
+    // Elements in the same traversal layer are independent. Grouping by block size and child count
+    // lets the common 2x2 and 3x3 cases use batched/SIMD kernels while preserving traversal order.
     const auto build_layer_groups = [&](const std::vector<std::vector<int>>& layers,
                                         std::vector<std::vector<ElementGroup>>& layer_groups)
     {
@@ -1826,6 +1850,8 @@ namespace ReducedLung
             pivot_tolerance_);
       };
 
+      // A child subtree is represented by delta_q_in = G delta_p_in + h. Pressure continuity maps
+      // the parent outlet-pressure unknown to the child's inlet pressure before adding its flow.
       const auto add_2x2_child_contribution =
           [&](int child_interface_index, int matrix_row_offset, double& rhs_shift)
       {
@@ -2939,6 +2965,8 @@ namespace ReducedLung
       };
 
       const auto bottom_up_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
+      // Bottom-up pass: assemble each element block after child relations are known, then condense
+      // it to the affine inlet relation consumed by its parent.
       if (use_scalar_tree_solve_)
       {
         if (profile_ != nullptr)
@@ -3118,6 +3146,8 @@ namespace ReducedLung
       const auto set_delta_local_value = [&](int local_dof_id, double value)
       { delta_values[static_cast<std::size_t>(local_dof_id)] = value; };
 
+      // Top-down pass: start from the root boundary pressure correction, recover local unknowns,
+      // and propagate child inlet-pressure corrections through stored pressure-continuity maps.
       const auto recover_top_down_element = [&](int element_index)
       {
         const std::size_t element_index_size = static_cast<std::size_t>(element_index);

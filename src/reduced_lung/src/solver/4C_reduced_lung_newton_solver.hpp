@@ -48,7 +48,8 @@ namespace ReducedLung
    * @brief Full-step Newton solver for reduced-lung nonlinear systems.
    *
    * This solver is intentionally parallel to @ref NoxSolver. It reuses the reduced-lung assembly
-   * pipeline and the existing sparse linear solver backend, but owns the nonlinear iteration loop.
+   * pipeline, but owns the nonlinear iteration loop and delegates correction solves to a
+   * @ref NewtonLinearSolver backend.
    */
   class NewtonSolver
   {
@@ -62,10 +63,29 @@ namespace ReducedLung
      */
     NewtonSolver(const NewtonSolverContext& context, double initial_time = 0.0);
 
+    /**
+     * @brief Disable copying for referenced external state.
+     */
     NewtonSolver(const NewtonSolver&) = delete;
+
+    /**
+     * @brief Disable copy assignment for referenced external state.
+     */
     NewtonSolver& operator=(const NewtonSolver&) = delete;
+
+    /**
+     * @brief Disable moving for referenced external state.
+     */
     NewtonSolver(NewtonSolver&&) = delete;
+
+    /**
+     * @brief Disable move assignment for referenced external state.
+     */
     NewtonSolver& operator=(NewtonSolver&&) = delete;
+
+    /**
+     * @brief Destroy the Newton solver.
+     */
     ~NewtonSolver() = default;
 
     /**
@@ -78,18 +98,42 @@ namespace ReducedLung
 
     /**
      * @brief Final residual norm from the most recent nonlinear solve.
+     *
+     * @return Euclidean norm of the last assembled residual.
      */
     [[nodiscard]] double last_residual_norm() const { return last_residual_norm_; }
 
    private:
+    /**
+     * @brief Export a trial solution to owned and locally relevant dof vectors and update models.
+     *
+     * @param x Current nonlinear trial solution on the Newton correction map.
+     */
     void sync_state_from_x(const Core::LinAlg::Vector<double>& x);
 
+    /**
+     * @brief Assemble the residual vector for the currently synchronized reduced-lung state.
+     *
+     * @return Euclidean norm of the assembled residual.
+     */
     double assemble_residual_for_current_state();
 
+    /**
+     * @brief Assemble and complete the sparse Jacobian for sparse Newton correction solves.
+     */
     void assemble_jacobian_for_current_state();
 
+    /**
+     * @brief Assemble structured tree-linearization coefficients for tree Newton correction solves.
+     */
     void assemble_tree_linearization_for_current_state();
 
+    /**
+     * @brief Solve one linear Newton correction and return the correction norm.
+     *
+     * @param iteration Current nonlinear Newton iteration index.
+     * @return Euclidean norm of the computed correction vector.
+     */
     double solve_linear_correction(unsigned int iteration);
 
     Core::LinAlg::Vector<double>& x_solution_;

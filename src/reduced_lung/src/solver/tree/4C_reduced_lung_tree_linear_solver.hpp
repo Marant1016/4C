@@ -26,25 +26,34 @@ namespace ReducedLung
 {
   struct TreeNewtonLinearSolverProfile;
 
+  /**
+   * @brief Location of one tree-solver coefficient in row-oriented structured storage.
+   */
   struct TreeCoefficientLocation
   {
-    int local_row = -1;
-    int local_dof = -1;
-    int structured_entry_index = -1;
+    int local_row = -1;               ///< Local residual row id.
+    int local_dof = -1;               ///< Local dof id on the locally relevant dof map.
+    int structured_entry_index = -1;  ///< Entry index inside the structured row storage.
   };
 
+  /**
+   * @brief Debug/value view of a structured coefficient stored by the direct tree target.
+   */
   struct TreeStructuredCoefficientValue
   {
-    int local_row = -1;
-    int local_dof = -1;
-    double value = 0.0;
-    const char* context = nullptr;
+    int local_row = -1;             ///< Local residual row id.
+    int local_dof = -1;             ///< Local dof id on the locally relevant dof map.
+    double value = 0.0;             ///< Stored coefficient value.
+    const char* context = nullptr;  ///< Human-readable coefficient context.
   };
 
+  /**
+   * @brief Coefficient source used by the serial tree Newton linear solver.
+   */
   enum class TreeNewtonLinearSolverCoefficientSource
   {
-    SparseJacobian,
-    StructuredTreeBlocks,
+    SparseJacobian,        ///< Read coefficients from a completed sparse Jacobian.
+    StructuredTreeBlocks,  ///< Read coefficients from structured tree-linearization blocks.
   };
 
   /**
@@ -52,58 +61,133 @@ namespace ReducedLung
    */
   struct TreeNewtonLinearSolverContext
   {
-    const ReducedLungTreeMetadata& tree_metadata;
-    double pivot_tolerance = 1.0e-12;
+    const ReducedLungTreeMetadata& tree_metadata;  ///< Directed tree metadata for the solve.
+    double pivot_tolerance = 1.0e-12;              ///< Dense pivot tolerance.
     TreeNewtonLinearSolverCoefficientSource coefficient_source =
-        TreeNewtonLinearSolverCoefficientSource::SparseJacobian;
-    TreeNewtonLinearSolverProfile* profile = nullptr;
-    bool force_batch_tree_solve = false;
-    bool error_on_dense_fallback = false;
+        TreeNewtonLinearSolverCoefficientSource::SparseJacobian;  ///< Coefficient source.
+    TreeNewtonLinearSolverProfile* profile = nullptr;             ///< Optional profile sink.
+    bool force_batch_tree_solve = false;   ///< Force batched path even for very small trees.
+    bool error_on_dense_fallback = false;  ///< Throw if optimized batches need dense fallback.
   };
 
   /**
    * @brief Serial tree-based solver for reduced-lung Newton correction systems.
    *
-   * The first implementation consumes the already assembled sparse Jacobian and residual, then uses
-   * tree metadata to condense subtrees bottom-up and recover the correction top-down.
+   * Uses tree metadata to condense subtrees bottom-up into inlet relations and recover the Newton
+   * correction top-down. Runtime NewtonTree uses structured coefficients; sparse coefficients
+   * remain available for validation.
    */
   class TreeNewtonLinearSolver : public NewtonLinearSolver, public TreeCoefficientAssemblyTarget
   {
    public:
+    /**
+     * @brief Construct the serial tree Newton correction solver.
+     *
+     * @param context Tree metadata, coefficient source, tolerances, and optional profile sink.
+     */
     explicit TreeNewtonLinearSolver(const TreeNewtonLinearSolverContext& context);
 
+    /**
+     * @brief Return the linearization representation required by this solver.
+     *
+     * @return Sparse or structured tree-block linearization type.
+     */
     [[nodiscard]] NewtonLinearizationType linearization_type() const override;
 
+    /**
+     * @brief Provide structured tree-linearization coefficients for the next solve.
+     *
+     * @param tree_linearization Structured coefficients assembled for the current Newton state.
+     */
     void set_tree_linearization(const TreeLinearization& tree_linearization) override;
 
+    /**
+     * @brief Return this solver as a direct structured coefficient assembly target.
+     *
+     * @return Direct coefficient target for structured runtime assembly.
+     */
     [[nodiscard]] TreeCoefficientAssemblyTarget* direct_tree_coefficient_target() override;
 
+    /**
+     * @brief Return stored direct structured coefficients for diagnostics.
+     *
+     * @return Flat list of direct coefficient values and their row/dof locations.
+     */
     [[nodiscard]] std::vector<TreeStructuredCoefficientValue> structured_coefficient_values() const;
 
+    /**
+     * @brief Solve one Newton correction system with the tree algorithm.
+     *
+     * @param jacobian Sparse Jacobian matrix used by the validation coefficient source.
+     * @param residual Residual vector for the current nonlinear state.
+     * @param x Current nonlinear solution vector.
+     * @param metadata Current time-step and Newton-iteration metadata.
+     * @param delta Output Newton correction vector.
+     */
     void solve(Core::LinAlg::SparseMatrix& jacobian, const Core::LinAlg::Vector<double>& residual,
         const Core::LinAlg::Vector<double>& x, const NewtonLinearSystemMetadata& metadata,
         Core::LinAlg::Vector<double>& delta) override;
 
    private:
+    /**
+     * @brief Contiguous group of elements with identical local block shape.
+     */
     struct ElementGroup
     {
-      int begin = 0;
-      int end = 0;
-      int block_size = 0;
-      int child_count = 0;
+      int begin = 0;        ///< First grouped element index.
+      int end = 0;          ///< One-past-last grouped element index.
+      int block_size = 0;   ///< Element local block size.
+      int child_count = 0;  ///< Number of child interfaces.
     };
 
+    /**
+     * @brief Precompute topology, row, dof, coefficient-location, grouping, and workspace data.
+     */
     void build_symbolic_plan();
 
+    /**
+     * @brief Resolve structured row-entry indices for all coefficients used by the tree solver.
+     *
+     * @param tree_linearization Structured coefficient storage for the current layout.
+     */
     void resolve_structured_coefficient_locations(const TreeLinearization& tree_linearization);
 
+    /**
+     * @brief Append a direct structured coefficient value to this solver target.
+     *
+     * @param local_row_id Local residual row id.
+     * @param local_dof_id Local dof id on the locally relevant dof map.
+     * @param value Coefficient value.
+     */
     void append_value(int local_row_id, int local_dof_id, double value) override;
 
+    /**
+     * @brief Replace a direct structured coefficient value in this solver target.
+     *
+     * @param local_row_id Local residual row id.
+     * @param local_dof_id Local dof id on the locally relevant dof map.
+     * @param value New coefficient value.
+     */
     void replace_value(int local_row_id, int local_dof_id, double value) override;
 
+    /**
+     * @brief Replace a batch of direct structured coefficient values.
+     *
+     * @param local_row_ids Local residual row ids.
+     * @param local_dof_ids Local dof ids on the locally relevant dof map.
+     * @param values New coefficient values.
+     */
     void replace_values(std::span<const int> local_row_ids, std::span<const int> local_dof_ids,
         std::span<const double> values) override;
 
+    /**
+     * @brief Set one direct structured coefficient value.
+     *
+     * @param local_row_id Local residual row id.
+     * @param local_dof_id Local dof id on the locally relevant dof map.
+     * @param value Coefficient value.
+     * @param operation Human-readable operation name for diagnostics.
+     */
     void set_direct_coefficient_value(
         int local_row_id, int local_dof_id, double value, const char* operation);
 

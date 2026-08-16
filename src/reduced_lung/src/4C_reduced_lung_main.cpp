@@ -52,6 +52,9 @@ namespace ReducedLung
 {
   namespace
   {
+    /**
+     * Runtime context extracted from Global::Problem for the reduced-lung simulation.
+     */
     struct ReducedLungContext
     {
       ReducedLungParameters parameters;
@@ -64,6 +67,9 @@ namespace ReducedLung
       const Core::Utils::FunctionManager& function_manager;
     };
 
+    /**
+     * Collect reduced-lung input, communicator, IO, and solver configuration from the 4C problem.
+     */
     ReducedLungContext make_reduced_lung_context_from_problem(Global::Problem& problem)
     {
       const ReducedLungParameters parameters =
@@ -87,6 +93,9 @@ namespace ReducedLung
       };
     }
 
+    /**
+     * Check whether the optional NewtonTree runtime profile should be printed.
+     */
     bool tree_profile_enabled_from_environment()
     {
       const char* const value = std::getenv("FOUR_C_REDUCED_LUNG_TREE_PROFILE");
@@ -97,6 +106,9 @@ namespace ReducedLung
              setting != "off" && setting != "OFF";
     }
 
+    /**
+     * Return a printable name for the selected reduced-lung nonlinear solver workflow.
+     */
     const char* nonlinear_solver_name(ReducedLungParameters::NonlinearSolverType solver)
     {
       using SolverType = ReducedLungParameters::NonlinearSolverType;
@@ -113,9 +125,15 @@ namespace ReducedLung
       return "Unknown";
     }
 
+    /**
+     * Owns setup and time integration for one reduced-lung simulation run.
+     */
     class ReducedLungSimulation
     {
      public:
+      /**
+       * Construct the simulation from an already extracted reduced-lung runtime context.
+       */
       explicit ReducedLungSimulation(const ReducedLungContext& context)
           : context_(context),
             actdis_(
@@ -127,6 +145,9 @@ namespace ReducedLung
       {
       }
 
+      /**
+       * Build the discretization, model blocks, maps, and selected nonlinear solver.
+       */
       void initialize()
       {
         validate_parameters();
@@ -138,6 +159,9 @@ namespace ReducedLung
         build_linear_system_and_solver();
       }
 
+      /**
+       * Run the reduced-lung time loop with the configured nonlinear solver.
+       */
       void run()
       {
         if (Core::Communication::my_mpi_rank(comm_) == 0)
@@ -158,6 +182,9 @@ namespace ReducedLung
       }
 
      private:
+      /**
+       * Validate reduced-lung time-integration and nonlinear solver parameters.
+       */
       void validate_parameters() const
       {
         const auto& dynamics = context_.parameters.dynamics;
@@ -184,6 +211,9 @@ namespace ReducedLung
         }
       }
 
+      /**
+       * Build the local reduced-lung discretization and visualization writer.
+       */
       void build_discretization()
       {
         lung_mesh_ = build_discretization_from_mesh(
@@ -205,6 +235,9 @@ namespace ReducedLung
         comm_ = actdis_->get_comm();
       }
 
+      /**
+       * Instantiate local airway and terminal-unit model blocks and their evaluators.
+       */
       void build_element_models()
       {
         create_local_element_models(*actdis_, context_.parameters, element_types_, airways_,
@@ -217,6 +250,9 @@ namespace ReducedLung
         Airways::create_evaluators(airways_);
       }
 
+      /**
+       * Create node-attached boundary conditions and junction equations.
+       */
       void build_node_entities()
       {
         global_ele_ids_per_node_ = create_global_ele_ids_per_node(*actdis_, comm_);
@@ -237,6 +273,9 @@ namespace ReducedLung
             n_bifurcations, n_boundary_conditions);
       }
 
+      /**
+       * Assign local equation ids to every residual-contributing reduced-lung object.
+       */
       void assign_equation_ids()
       {
         int n_local_equations = 0;
@@ -247,6 +286,9 @@ namespace ReducedLung
         BoundaryConditions::assign_local_equation_ids(boundary_conditions_, n_local_equations);
       }
 
+      /**
+       * Build owned, row, and locally relevant maps and translate global ids to local ids.
+       */
       void build_maps_and_local_ids()
       {
         locally_owned_dof_map_ = std::make_unique<Core::LinAlg::Map>(
@@ -267,6 +309,9 @@ namespace ReducedLung
         BoundaryConditions::assign_local_dof_ids(*locally_relevant_dof_map_, boundary_conditions_);
       }
 
+      /**
+       * Allocate the shared residual/Jacobian storage and instantiate the selected solver path.
+       */
       void build_linear_system_and_solver()
       {
         FOUR_C_ASSERT_ALWAYS(locally_owned_dof_map_ != nullptr && row_map_ != nullptr &&
@@ -299,6 +344,9 @@ namespace ReducedLung
         }
       }
 
+      /**
+       * Build the legacy NOX-based nonlinear solver workflow.
+       */
       void build_nox_solver()
       {
         FOUR_C_ASSERT_ALWAYS(dofs_ != nullptr && locally_relevant_dofs_ != nullptr &&
@@ -320,6 +368,9 @@ namespace ReducedLung
         nox_solver_ = std::make_unique<NoxSolver>(nox_solver_context, current_time_);
       }
 
+      /**
+       * Build the custom Newton workflow with the generic sparse linear solver backend.
+       */
       void build_newton_solver_with_sparse_linear_solver()
       {
         FOUR_C_ASSERT_ALWAYS(row_map_ != nullptr,
@@ -334,6 +385,9 @@ namespace ReducedLung
         build_newton_solver();
       }
 
+      /**
+       * Build the custom Newton workflow with the serial structured-tree linear solver backend.
+       */
       void build_newton_solver_with_tree_linear_solver()
       {
         int comm_size = 1;
@@ -368,6 +422,9 @@ namespace ReducedLung
         build_newton_solver();
       }
 
+      /**
+       * Build the common custom Newton driver around the selected Newton linear solver backend.
+       */
       void build_newton_solver()
       {
         FOUR_C_ASSERT_ALWAYS(dofs_ != nullptr && locally_relevant_dofs_ != nullptr &&
@@ -390,6 +447,9 @@ namespace ReducedLung
         newton_solver_ = std::make_unique<NewtonSolver>(newton_solver_context, current_time_);
       }
 
+      /**
+       * Advance one timestep and print compact convergence information for custom Newton runs.
+       */
       void solve_timestep(int step)
       {
         FOUR_C_ASSERT_ALWAYS(nox_solver_ != nullptr || newton_solver_ != nullptr,
@@ -431,6 +491,9 @@ namespace ReducedLung
         Airways::end_of_timestep_routine(airways_, *locally_relevant_dofs_, dt_);
       }
 
+      /**
+       * Write visualization output when the configured output interval is reached.
+       */
       void write_output_if_due(int step)
       {
         if (step % context_.parameters.dynamics.results_every != 0)
@@ -450,6 +513,9 @@ namespace ReducedLung
         visualization_writer_->write_to_disk(current_time_, step);
       }
 
+      /**
+       * Print optional NewtonTree profiling counters collected during the run.
+       */
       void print_tree_profile_summary() const
       {
         if (!tree_profile_enabled_ || Core::Communication::my_mpi_rank(comm_) != 0)
@@ -564,6 +630,9 @@ namespace ReducedLung
 
   }  // namespace
 
+  /**
+   * Run the reduced-lung simulation for an explicit 4C problem instance.
+   */
   void reduced_lung_main(Global::Problem& problem)
   {
     const ReducedLungContext context = make_reduced_lung_context_from_problem(problem);
@@ -572,6 +641,9 @@ namespace ReducedLung
     simulation.run();
   }
 
+  /**
+   * Run the reduced-lung simulation for the global 4C problem instance.
+   */
   void reduced_lung_main() { reduced_lung_main(*Global::Problem::instance()); }
 }  // namespace ReducedLung
 

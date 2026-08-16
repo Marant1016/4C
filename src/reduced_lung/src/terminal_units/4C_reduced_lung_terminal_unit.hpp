@@ -33,8 +33,10 @@ namespace ReducedLung::TerminalUnits
     RecruitmentModel recruitment_model;
     ResidualEvaluator residual_evaluator;
     JacobianEvaluator jacobian_evaluator;
-    StaticTreeLinearizationEvaluator static_tree_linearization_evaluator;
-    TreeLinearizationEvaluator tree_linearization_evaluator;
+    StaticTreeLinearizationEvaluator
+        static_tree_linearization_evaluator;  ///< One-time structured coefficient pattern callback.
+    TreeLinearizationEvaluator
+        tree_linearization_evaluator;  ///< Dynamic structured coefficient refresh callback.
     InternalStateUpdater internal_state_updater;
     EndOfTimestepRoutine end_of_timestep_routine;
     OutputEvaluator output_evaluator;
@@ -63,12 +65,18 @@ namespace ReducedLung::TerminalUnits
 
   /**
    * @brief Assemble static terminal-unit structured tree-linearization row patterns.
+   *
+   * Appends the fixed pressure coefficients and dynamic q-coefficient placeholder consumed by the
+   * direct and generic structured tree assembly paths.
    */
   void update_static_tree_linearization(
       TreeCoefficientAssemblyTarget& target, TerminalUnitContainer& terminal_units);
 
   /**
    * @brief Update dynamic terminal-unit structured tree-linearization coefficients.
+   *
+   * Replaces only the q coefficient in the row pattern created by
+   * update_static_tree_linearization().
    */
   void update_tree_linearization(TreeCoefficientAssemblyTarget& target,
       TerminalUnitContainer& terminal_units,

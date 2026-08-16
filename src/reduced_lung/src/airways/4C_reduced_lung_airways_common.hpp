@@ -86,12 +86,22 @@ namespace ReducedLung::Airways
       std::function<void(const AirwayData& data, Core::LinAlg::SparseMatrix& target_mat,
           const Core::LinAlg::Vector<double>& locally_relevant_dofs, double time_step_size_dt)>;
 
-  ///< Callback type for structured tree linearization block assembly.
+  /**
+   * @brief Callback type for state-dependent structured tree coefficient assembly.
+   *
+   * Implementations may write either to generic TreeLinearization storage or directly to a
+   * TreeNewtonLinearSolver coefficient target.
+   */
   using TreeLinearizationEvaluator =
       std::function<void(const AirwayData& data, TreeCoefficientAssemblyTarget& target,
           const Core::LinAlg::Vector<double>& locally_relevant_dofs, double time_step_size_dt)>;
 
-  ///< Callback type for one-time structured tree-linearization row-pattern assembly.
+  /**
+   * @brief Callback type for one-time structured tree coefficient pattern assembly.
+   *
+   * Static callbacks append pressure-column entries and placeholder dynamic coefficients that are
+   * replaced by TreeLinearizationEvaluator during Newton iterations.
+   */
   using StaticTreeLinearizationEvaluator =
       std::function<void(const AirwayData& data, TreeCoefficientAssemblyTarget& target)>;
 

@@ -418,6 +418,7 @@ namespace ReducedLung::TerminalUnits::Rheology
         const Core::LinAlg::Vector<double>& locally_relevant_dofs,
         const Elasticity::ElasticPressurePartialsView& elastic_pressure_partials)
     {
+      /* Static setup inserted pressure entries and a q placeholder; only q changes with state. */
       const size_t element_count = data.number_of_elements();
       const auto& viscosity = kelvin_voigt_model.viscosity_eta;
       std::span<double> grad_q =
@@ -442,6 +443,7 @@ namespace ReducedLung::TerminalUnits::Rheology
         const Core::LinAlg::Vector<double>& locally_relevant_dofs,
         const Elasticity::ElasticPressurePartialsView& elastic_pressure_partials, double dt)
     {
+      /* Batch Four-element Maxwell q coefficients into persistent scratch before replacement. */
       const size_t element_count = data.number_of_elements();
       const auto& viscosity = four_element_maxwell_model.viscosity_eta;
       const auto& maxwell_elasticity = four_element_maxwell_model.elasticity_E_m;
@@ -469,6 +471,7 @@ namespace ReducedLung::TerminalUnits::Rheology
     void initialize_tree_linearization(
         TreeCoefficientAssemblyTarget& target, TerminalUnitData& data)
     {
+      /* Append the fixed terminal-unit row pattern once for either generic or direct targets. */
       for (size_t i = 0; i < data.number_of_elements(); ++i)
       {
         target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0);

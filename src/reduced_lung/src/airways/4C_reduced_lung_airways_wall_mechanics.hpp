@@ -128,12 +128,18 @@ namespace ReducedLung::Airways::WallMechanics
 
   /**
    * @brief Build static structured tree-linearization row-pattern evaluator for a wall model.
+   *
+   * The callback appends wall-model-specific row entries once so later dynamic assembly can replace
+   * only the flow-dependent coefficients.
    */
   StaticTreeLinearizationEvaluator make_static_tree_linearization_evaluator(WallModel& wall_model);
 
   /**
    * @brief Build dynamic structured tree-linearization evaluator callback for a wall/flow-model
    * pair.
+   *
+   * The callback evaluates resistance, inertia, and wall derivatives into reusable scratch buffers
+   * and writes them through TreeCoefficientAssemblyTarget.
    */
   TreeLinearizationEvaluator make_tree_linearization_evaluator(
       WallModel& wall_model, FlowModel& flow_model);

@@ -29,7 +29,8 @@ namespace ReducedLung::TerminalUnits
   struct KelvinVoigt
   {
     std::vector<double> viscosity_eta;
-    std::vector<double> tree_linearization_grad_q;
+    std::vector<double>
+        tree_linearization_grad_q;  ///< Reusable q-coefficient scratch for structured assembly.
   };
 
   /**
@@ -44,7 +45,8 @@ namespace ReducedLung::TerminalUnits
     std::vector<double> elasticity_E_m;
     std::vector<double> viscosity_eta_m;
     std::vector<double> maxwell_pressure_p_m;
-    std::vector<double> tree_linearization_grad_q;
+    std::vector<double>
+        tree_linearization_grad_q;  ///< Reusable q-coefficient scratch for structured assembly.
   };
 
   /**
@@ -114,12 +116,18 @@ namespace ReducedLung::TerminalUnits::Rheology
 
   /**
    * @brief Build static structured tree-linearization row-pattern evaluator.
+   *
+   * The callback appends the terminal-unit p1, p2, and q entries once so dynamic assembly can
+   * replace only the q coefficient.
    */
   StaticTreeLinearizationEvaluator make_static_tree_linearization_evaluator(
       RheologicalModel& rheological_model);
 
   /**
    * @brief Build dynamic structured tree-linearization evaluator for the concrete rheology variant.
+   *
+   * The callback combines elastic-pressure gradients and rheology terms into reusable scratch
+   * storage before writing q coefficients through TreeCoefficientAssemblyTarget.
    */
   TreeLinearizationEvaluator make_tree_linearization_evaluator(RheologicalModel& rheological_model,
       Elasticity::ElasticPressurePartialsEvaluator elastic_pressure_partials_evaluator);

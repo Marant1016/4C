@@ -24,6 +24,9 @@ namespace ReducedLung
 {
   namespace
   {
+    /**
+     * Local element-equation ownership data before it is gathered across ranks.
+     */
     struct ElementEquationMetadata
     {
       int first_local_equation_id = -1;
@@ -51,6 +54,9 @@ namespace ReducedLung
       return ids;
     }
 
+    /**
+     * Map global ids to local ids on the provided map, preserving input order.
+     */
     std::vector<int> local_ids_for_global_ids(
         const Core::LinAlg::Map& map, const std::vector<int>& global_ids)
     {
@@ -80,6 +86,9 @@ namespace ReducedLung
           "Duplicate reduced-lung model data for element {}.", global_element_id + 1);
     }
 
+    /**
+     * Collect element state-equation row ranges from locally owned model blocks.
+     */
     std::map<int, ElementEquationMetadata> collect_element_equation_metadata(
         const Airways::AirwayContainer& airways,
         const TerminalUnits::TerminalUnitContainer& terminal_units,
@@ -135,6 +144,9 @@ namespace ReducedLung
       return false;
     }
 
+    /**
+     * Depth-first cycle check using temporary and final visitation colors.
+     */
     void validate_acyclic_from_element(
         const ReducedLungTreeMetadata& metadata, int element_index, std::vector<int>& color)
     {
@@ -166,6 +178,9 @@ namespace ReducedLung
       }
     }
 
+    /**
+     * Check that every element can be reached from the unique directed root element.
+     */
     void validate_connected_from_root(const ReducedLungTreeMetadata& metadata)
     {
       std::vector<int> stack{metadata.root_element_index};
@@ -194,6 +209,9 @@ namespace ReducedLung
           all_visited, "Reduced-lung tree topology is not connected from the root element.");
     }
 
+    /**
+     * Build parent/child relations from the directed element-node topology.
+     */
     void build_tree_relations(ReducedLungTreeMetadata& metadata)
     {
       std::map<int, std::vector<int>> elements_starting_at_node;
@@ -257,6 +275,9 @@ namespace ReducedLung
       validate_connected_from_root(metadata);
     }
 
+    /**
+     * Build root-to-leaf and leaf-to-root traversal layers for tree solves.
+     */
     void build_layers(ReducedLungTreeMetadata& metadata)
     {
       std::vector<int> current_layer{metadata.root_element_index};
@@ -280,6 +301,9 @@ namespace ReducedLung
       std::reverse(metadata.bottom_up_layers.begin(), metadata.bottom_up_layers.end());
     }
 
+    /**
+     * Add metadata for one-child junction equations after distributed connection data is gathered.
+     */
     void add_connection_metadata(ReducedLungTreeMetadata& metadata,
         const std::map<int, int>& child_by_parent,
         const std::map<int, int>& first_global_equation_by_parent,
@@ -331,6 +355,9 @@ namespace ReducedLung
       }
     }
 
+    /**
+     * Check whether the two bifurcation children match the directed topology of the parent.
+     */
     bool bifurcation_children_match(
         const TreeElementMetadata& parent, int child_1_index, int child_2_index)
     {
@@ -338,6 +365,9 @@ namespace ReducedLung
              has_child(parent, child_2_index) && child_1_index != child_2_index;
     }
 
+    /**
+     * Add metadata for two-child junction equations after distributed bifurcation data is gathered.
+     */
     void add_bifurcation_metadata(ReducedLungTreeMetadata& metadata,
         const std::map<int, int>& child_1_by_parent, const std::map<int, int>& child_2_by_parent,
         const std::map<int, int>& first_global_equation_by_parent,
@@ -397,6 +427,9 @@ namespace ReducedLung
       }
     }
 
+    /**
+     * Ensure every non-leaf element has matching connection or bifurcation metadata.
+     */
     void validate_junction_coverage(const ReducedLungTreeMetadata& metadata,
         const std::map<int, TreeJunctionKind>& junction_kind)
     {
@@ -427,6 +460,9 @@ namespace ReducedLung
       }
     }
 
+    /**
+     * Gather local junction rows from all ranks and create globally complete junction metadata.
+     */
     void build_junction_metadata(ReducedLungTreeMetadata& metadata,
         const Junctions::ConnectionData& connections,
         const Junctions::BifurcationData& bifurcations, const Core::LinAlg::Map& row_map,
@@ -488,6 +524,9 @@ namespace ReducedLung
       validate_junction_coverage(metadata, junction_kind);
     }
 
+    /**
+     * Return the dof constrained by a boundary condition under the reduced-lung element layout.
+     */
     int expected_boundary_dof_id(const TreeElementMetadata& element, TreeBoundarySide side,
         BoundaryConditions::Type boundary_type)
     {
@@ -505,6 +544,9 @@ namespace ReducedLung
       FOUR_C_THROW("Unsupported reduced-lung boundary-condition type in tree metadata.");
     }
 
+    /**
+     * Determine whether a boundary node lies on the inlet or outlet side of an element.
+     */
     TreeBoundarySide determine_boundary_side(const TreeElementMetadata& element, int node_id)
     {
       if (node_id == element.inlet_node_id)
@@ -519,6 +561,9 @@ namespace ReducedLung
           element.global_element_id + 1);
     }
 
+    /**
+     * Gather local boundary-condition rows and validate constrained dofs against topology.
+     */
     void build_boundary_condition_metadata(ReducedLungTreeMetadata& metadata,
         const BoundaryConditions::BoundaryConditionContainer& boundary_conditions,
         const Core::LinAlg::Map& row_map, const Core::LinAlg::Map& locally_relevant_dof_map)
@@ -588,6 +633,9 @@ namespace ReducedLung
       }
     }
 
+    /**
+     * Check whether an element side has a boundary condition attached to it.
+     */
     bool has_boundary_on_element_side(
         const ReducedLungTreeMetadata& metadata, int element_index_value, TreeBoundarySide side)
     {
@@ -596,6 +644,9 @@ namespace ReducedLung
           { return boundary.element_index == element_index_value && boundary.side == side; });
     }
 
+    /**
+     * Validate that the root inlet and all leaf outlets close the tree system.
+     */
     void validate_boundary_closure(const ReducedLungTreeMetadata& metadata)
     {
       FOUR_C_ASSERT_ALWAYS(has_boundary_on_element_side(
@@ -619,6 +670,9 @@ namespace ReducedLung
     }
   }  // namespace
 
+  /**
+   * Build topology, equation, dof, junction, boundary, and traversal metadata for NewtonTree.
+   */
   ReducedLungTreeMetadata build_reduced_lung_tree_metadata(
       const ReducedLungTreeMetadataContext& context)
   {

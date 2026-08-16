@@ -28,11 +28,17 @@ namespace ReducedLung
   {
     using Clock = std::chrono::steady_clock;
 
+    /**
+     * Return the elapsed wall-clock time in seconds since @p start.
+     */
     double elapsed_seconds(const Clock::time_point start)
     {
       return std::chrono::duration<double>(Clock::now() - start).count();
     }
 
+    /**
+     * Compute the residual two-norm with a serial fast path.
+     */
     double compute_residual_norm(const Core::LinAlg::Vector<double>& residual)
     {
       if (Core::Communication::num_mpi_ranks(residual.get_comm()) != 1)
@@ -50,6 +56,9 @@ namespace ReducedLung
       return std::sqrt(norm_square);
     }
 
+    /**
+     * Accumulate structured tree-linearization timing into the matching profile bucket.
+     */
     void add_tree_linearization_phase_time(NewtonSolverProfile& profile,
         ReducedLungAssemblyPipeline::TreeLinearizationAssemblyPhase phase, double elapsed_time)
     {
@@ -74,6 +83,9 @@ namespace ReducedLung
       }
     }
 
+    /**
+     * Accumulate residual assembly timing into the matching profile bucket.
+     */
     void add_residual_phase_time(NewtonSolverProfile& profile,
         ReducedLungAssemblyPipeline::TreeLinearizationAssemblyPhase phase, double elapsed_time)
     {
@@ -319,6 +331,9 @@ namespace ReducedLung
     if (TreeCoefficientAssemblyTarget* direct_target =
             linear_solver_->direct_tree_coefficient_target())
     {
+      // Some optimized tree solvers assemble coefficients directly into their own SoA storage. The
+      // fallback path below keeps a reusable TreeLinearization object for solvers without this
+      // hook.
       const auto static_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
       if (!tree_linearization_static_initialized_)
       {
@@ -359,6 +374,8 @@ namespace ReducedLung
     {
       if (!tree_linearization_static_initialized_)
       {
+        // Static coefficients are retained after the first assembly. Clear only the dynamic values
+        // while the reusable storage still contains no static entries.
         tree_linearization_.clear_values();
       }
     }

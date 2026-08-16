@@ -369,6 +369,7 @@ namespace ReducedLung::Airways::WallMechanics
       AirwayData const& data, std::span<double> resistance_derivative,
       std::span<const double> inertia_derivative)
   {
+    /* Static setup inserted pressure entries and a q placeholder; only q changes with state. */
     FOUR_C_ASSERT_ALWAYS(resistance_derivative.size() == data.number_of_elements(),
         "Rigid airway tree coefficient buffer has {} entries but expected {}.",
         resistance_derivative.size(), data.number_of_elements());
@@ -389,6 +390,7 @@ namespace ReducedLung::Airways::WallMechanics
       std::span<const double> viscous_wall_resistance_derivative_q1,
       std::span<const double> viscous_wall_resistance_derivative_q2, std::span<int> mass_row_id)
   {
+    /* Combine derivative terms in scratch and replace all dynamic q-coefficients in batches. */
     const size_t element_count = data.number_of_elements();
     FOUR_C_ASSERT_ALWAYS(resistance_derivative_q1.size() == element_count &&
                              resistance_derivative_q2.size() == element_count &&
@@ -415,6 +417,7 @@ namespace ReducedLung::Airways::WallMechanics
   void initialize_rigid_wall_tree_linearization(
       TreeCoefficientAssemblyTarget& target, const AirwayData& data)
   {
+    /* Append the fixed rigid-airway row pattern once for either generic or direct targets. */
     for (size_t i = 0; i < data.number_of_elements(); ++i)
     {
       target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0);
@@ -426,6 +429,7 @@ namespace ReducedLung::Airways::WallMechanics
   void initialize_kelvin_voigt_wall_tree_linearization(
       TreeCoefficientAssemblyTarget& target, const AirwayData& data)
   {
+    /* Kelvin-Voigt airways use two fixed rows; q entries are dynamic placeholders. */
     for (size_t i = 0; i < data.number_of_elements(); ++i)
     {
       const int momentum_row = data.local_row_id[i];

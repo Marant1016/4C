@@ -545,6 +545,7 @@ namespace ReducedLung
     void update_tree_linearization(TreeCoefficientAssemblyTarget& target,
         const BoundaryConditionContainer& boundary_conditions)
     {
+      /* Boundary constraints contribute constant identity rows to the structured linearization. */
       for (const auto& model : boundary_conditions.models)
       {
         for (size_t i = 0; i < model.data.size(); ++i)

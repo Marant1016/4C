@@ -136,6 +136,7 @@ namespace ReducedLung
               jacobian, boundary_conditions, locally_relevant_dofs, current_time);
         });
 
+    /* Reserve exact row capacities for the structured tree coefficient storage. */
     pipeline.tree_linearization_capacity_initializers.emplace_back(
         [&airways](TreeLinearization& linearization)
         {
@@ -200,6 +201,7 @@ namespace ReducedLung
         });
 
     using TreeAssemblyPhase = ReducedLungAssemblyPipeline::TreeLinearizationAssemblyPhase;
+    /* Static tree-linearization callbacks assemble state-independent structured coefficients. */
     pipeline.tree_linearization_static_assemblers.push_back(
         ReducedLungAssemblyPipeline::NamedStaticTreeLinearizationAssembler{
             .phase = TreeAssemblyPhase::Airways,
@@ -221,6 +223,8 @@ namespace ReducedLung
             .callback = [&boundary_conditions](TreeCoefficientAssemblyTarget& target)
             { BoundaryConditions::update_tree_linearization(target, boundary_conditions); }});
 
+    /* State-dependent tree-linearization callbacks refresh element coefficients each Newton step.
+     */
     pipeline.tree_linearization_assemblers.push_back(
         ReducedLungAssemblyPipeline::NamedTreeLinearizationAssembler{
             .phase = TreeAssemblyPhase::Airways,

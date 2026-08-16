@@ -26,6 +26,9 @@ namespace ReducedLung
   {
     using Clock = std::chrono::steady_clock;
 
+    /**
+     * Return the elapsed wall-clock time in seconds since @p start.
+     */
     double elapsed_seconds(const Clock::time_point start)
     {
       return std::chrono::duration<double>(Clock::now() - start).count();
@@ -56,6 +59,8 @@ namespace ReducedLung
     delta.put_scalar(0.0);
 
     Core::LinAlg::SolverParams solver_params;
+    // Each Newton correction uses the current Jacobian values. The first nonlinear iteration also
+    // resets internal sparse-solver state to avoid reusing data from the previous time step.
     solver_params.refactor = true;
     solver_params.reset = metadata.nonlinear_iteration == 0;
     if (linear_solver_->params().isParameter("Projector"))

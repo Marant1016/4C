@@ -87,6 +87,7 @@ namespace ReducedLung::TerminalUnits::Elasticity
         OgdenHyperelasticity& ogden_hyperelastic_model, TerminalUnitData& data,
         const Core::LinAlg::Vector<double>& locally_relevant_dofs, double dt)
     {
+      /* Fill model-owned gradient storage directly for structured tree coefficient assembly. */
       const auto dof_values = locally_relevant_dofs.local_values_as_span();
       const auto& lid_q = data.lid_q;
       const auto& volume = data.volume_v;

@@ -36,11 +36,14 @@ namespace ReducedLung
       high
     };
 
+    /**
+     * @brief Nonlinear solver workflow used for reduced-lung time integration.
+     */
     enum class NonlinearSolverType : std::uint8_t
     {
-      Nox,
-      NewtonSparse,
-      NewtonTree
+      Nox,           ///< Legacy NOX-based nonlinear solver workflow.
+      NewtonSparse,  ///< Custom Newton solver with generic sparse linear solves.
+      NewtonTree     ///< Custom Newton solver with the serial structured-tree linear solver.
     };
 
     struct Dynamics
@@ -54,7 +57,11 @@ namespace ReducedLung
       double nonlinear_residual_tolerance;
       double nonlinear_increment_tolerance;
       OutputVerbosity output_verbosity = OutputVerbosity::minimal;
-      // Keep NOX as the safe default; NewtonSparse and NewtonTree are explicit opt-in workflows.
+      /**
+       * @brief Selected nonlinear solver workflow.
+       *
+       * NOX is the safe default; custom Newton variants are explicit opt-in workflows.
+       */
       NonlinearSolverType nonlinear_solver = NonlinearSolverType::Nox;
     } dynamics;
     /**
