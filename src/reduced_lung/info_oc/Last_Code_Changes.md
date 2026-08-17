@@ -1,5 +1,74 @@
 # Last Code Changes
 
+Date: 2026-08-17
+
+## Goal
+
+Support root-inlet flow boundary conditions in the optimized serial `NewtonTree` correction solve.
+
+The tree solver previously found a boundary condition at the root inlet but always used that row to
+compute the root inlet pressure correction directly. That worked for root pressure boundary
+conditions, but a root flow boundary constrains the root inlet flow dof instead. The NOX and
+`NewtonSparse` sparse workflows already assemble flow boundary conditions as ordinary sparse system
+rows, so this change makes the tree root closure handle the same boundary type without adding any
+sparse fallback to the production tree path.
+
+## Code Updated
+
+Updated:
+
+```text
+src/reduced_lung/src/solver/tree/4C_reduced_lung_tree_linear_solver.hpp
+src/reduced_lung/src/solver/tree/4C_reduced_lung_tree_linear_solver.cpp
+```
+
+The tree solver now stores the actual root boundary type and constrained local dof from
+`TreeBoundaryConditionMetadata`.
+
+Root closure behavior is now:
+
+```text
+Pressure root BC:
+  delta_p_root = rhs_root_boundary / coeff_root_boundary
+
+Flow root BC:
+  root bottom-up relation: delta_q_root = G_root * delta_p_root + h_root
+  boundary equation:       coeff_root_boundary * delta_q_root = rhs_root_boundary
+  delta_p_root = (rhs_root_boundary / coeff_root_boundary - h_root) / G_root
+```
+
+The flow case reuses the already computed bottom-up affine root relation, so the optimized
+bottom-up/top-down algorithm and direct structured coefficient path remain unchanged. If the root
+flow relation has a near-zero pressure slope, `NewtonTree` now fails fast with a specific error
+instead of producing an undefined root pressure correction.
+
+## Tests Updated
+
+Updated:
+
+```text
+src/reduced_lung/tests/4C_reduced_lung_tree_linear_solver_test.cpp
+```
+
+Added a serial airway fixture with a root inlet flow boundary and outlet pressure boundary. New
+coverage checks:
+
+```text
+TreeNewtonLinearSolver root-inlet-flow correction against SparseNewtonLinearSolver
+direct structured coefficient assembly for root-inlet-flow trees against the generic structured path
+full NewtonTree workflow with root inlet flow against NOX and NewtonSparse
+```
+
+## Validation Run
+
+Passed:
+
+```text
+cmake --build build/debug --target reduced_lung_objs --parallel 4
+cmake --build build/debug --target unittests_reduced_lung --parallel 4
+ctest -R "^unittests_reduced_lung$" --output-on-failure
+```
+
 Date: 2026-08-09
 
 ## Goal

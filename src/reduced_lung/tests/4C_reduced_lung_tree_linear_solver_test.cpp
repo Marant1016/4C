@@ -221,6 +221,15 @@ namespace
     return params;
   }
 
+  ReducedLungParameters make_serial_airway_root_flow_parameters(double dt)
+  {
+    auto params = make_serial_airway_parameters(dt);
+    params.boundary_conditions.bc_type =
+        Core::IO::InputField<BoundaryType>(std::unordered_map<int, BoundaryType>{
+            {1, BoundaryType::Flow}, {2, BoundaryType::Pressure}});
+    return params;
+  }
+
   ReducedLungParameters make_bifurcation_parameters(double dt)
   {
     ReducedLungParameters params{};
@@ -1227,6 +1236,12 @@ namespace
         "tree_linear_serial_airways", make_serial_airway_parameters(0.1));
   }
 
+  TEST(ReducedLungTreeLinearSolverTests, RootInletFlowBoundaryMatchesSparseSolver)
+  {
+    compare_tree_and_sparse_corrections(
+        "tree_linear_root_inlet_flow", make_serial_airway_root_flow_parameters(0.1));
+  }
+
   TEST(ReducedLungTreeLinearSolverTests, BifurcationAirwaysMatchSparseSolver)
   {
     compare_tree_and_sparse_corrections(
@@ -1267,6 +1282,14 @@ namespace
   {
     compare_direct_and_generic_structured_coefficients(
         "tree_linear_direct_structured_rigid_airways", make_serial_airway_parameters(0.1), false);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests,
+      DirectStructuredAssemblyRootInletFlowBoundaryMatchesGenericPath)
+  {
+    compare_direct_and_generic_structured_coefficients(
+        "tree_linear_direct_structured_root_inlet_flow",
+        make_serial_airway_root_flow_parameters(0.1), false);
   }
 
   TEST(ReducedLungTreeLinearSolverTests,
@@ -1360,6 +1383,14 @@ namespace
     params.dynamics.number_of_steps = 3;
     compare_all_solver_workflows(
         "tree_workflow_serial_airways", params, {"t", "0.0"}, {.connection_flow_balance = true});
+  }
+
+  TEST(ReducedLungTreeWorkflowTests, RootInletFlowBoundaryMatchesNoxAndNewtonSparse)
+  {
+    auto params = make_serial_airway_root_flow_parameters(0.5);
+    params.dynamics.number_of_steps = 3;
+    compare_all_solver_workflows("tree_workflow_root_inlet_flow", params, {"0.25 + 0.1*t", "0.0"},
+        {.connection_flow_balance = true});
   }
 
   TEST(ReducedLungTreeWorkflowTests, BifurcationRigidAirwaysMatchNoxAndNewtonSparse)
