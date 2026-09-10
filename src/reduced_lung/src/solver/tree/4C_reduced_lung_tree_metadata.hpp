@@ -19,14 +19,23 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <span>
 #include <vector>
 
 FOUR_C_NAMESPACE_OPEN
 
-namespace Core::LinAlg
+namespace Core
 {
-  class Map;
-}
+  namespace FE
+  {
+    class Discretization;
+  }
+
+  namespace LinAlg
+  {
+    class Map;
+  }
+}  // namespace Core
 
 namespace ReducedLung
 {
@@ -114,7 +123,8 @@ namespace ReducedLung
    */
   struct TreeBoundaryConditionMetadata
   {
-    BoundaryConditions::Type type = BoundaryConditions::Type::Pressure;  ///< Boundary type.
+    BoundaryConditions::ConstrainedVariable constrained_variable =
+        BoundaryConditions::ConstrainedVariable::Pressure;  ///< Constrained boundary variable.
     TreeBoundarySide side = TreeBoundarySide::Inlet;  ///< Element side constrained by the boundary.
 
     int node_id = -1;        ///< Global node id of the boundary condition.
@@ -159,7 +169,9 @@ namespace ReducedLung
    */
   struct ReducedLungTreeMetadataContext
   {
-    const ReducedLungParameters& parameters;  ///< Reduced-lung input parameters and topology.
+    const Core::FE::Discretization& discretization;  ///< Initialized reduced-lung discretization.
+    std::span<const ReducedLungParameters::LungTree::ElementType>
+        element_types;  ///< Resolved element category by global element id.
     const std::map<int, int>& first_global_dof_of_ele;  ///< First global dof by element id.
     const std::map<int, int>& global_dof_per_ele;       ///< Number of dofs by element id.
 

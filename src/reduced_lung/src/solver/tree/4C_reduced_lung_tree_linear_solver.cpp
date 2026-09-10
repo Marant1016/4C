@@ -1006,7 +1006,7 @@ namespace ReducedLung
   void TreeNewtonLinearSolver::build_symbolic_plan()
   {
     const auto& root_boundary = root_inlet_boundary(tree_metadata_);
-    root_boundary_type_ = root_boundary.type;
+    root_boundary_variable_ = root_boundary.constrained_variable;
     root_boundary_row_ = root_boundary.local_equation_id;
     root_boundary_local_dof_ = root_boundary.local_dof_id;
 
@@ -3142,11 +3142,11 @@ namespace ReducedLung
           static_cast<std::size_t>(tree_metadata_.root_element_index);
       const double root_boundary_rhs = rhs_value(residual, root_boundary_row_);
       double root_inlet_pressure = 0.0;
-      if (root_boundary_type_ == BoundaryConditions::Type::Pressure)
+      if (root_boundary_variable_ == BoundaryConditions::ConstrainedVariable::Pressure)
       {
         root_inlet_pressure = root_boundary_rhs / root_boundary_coeff;
       }
-      else if (root_boundary_type_ == BoundaryConditions::Type::Flow)
+      else if (root_boundary_variable_ == BoundaryConditions::ConstrainedVariable::Flow)
       {
         const double root_subtree_slope = subtree_relation_G_[root_element_index_size];
         FOUR_C_ASSERT_ALWAYS(std::abs(root_subtree_slope) > pivot_tolerance_,

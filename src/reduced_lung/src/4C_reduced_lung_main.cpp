@@ -404,7 +404,8 @@ namespace ReducedLung
         }
 
         tree_metadata_ = build_reduced_lung_tree_metadata(ReducedLungTreeMetadataContext{
-            .parameters = context_.parameters,
+            .discretization = *actdis_,
+            .element_types = element_types_,
             .first_global_dof_of_ele = first_global_dof_of_ele_,
             .global_dof_per_ele = global_dof_per_ele_,
             .airways = airways_,

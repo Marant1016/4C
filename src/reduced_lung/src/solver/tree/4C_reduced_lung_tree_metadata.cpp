@@ -10,6 +10,8 @@
 #include "4C_reduced_lung_tree_metadata.hpp"
 
 #include "4C_comm_mpi_utils.hpp"
+#include "4C_fem_discretization.hpp"
+#include "4C_fem_general_element.hpp"
 #include "4C_linalg_map.hpp"
 #include "4C_utils_exceptions.hpp"
 
@@ -528,14 +530,14 @@ namespace ReducedLung
      * Return the dof constrained by a boundary condition under the reduced-lung element layout.
      */
     int expected_boundary_dof_id(const TreeElementMetadata& element, TreeBoundarySide side,
-        BoundaryConditions::Type boundary_type)
+        BoundaryConditions::ConstrainedVariable constrained_variable)
     {
-      if (boundary_type == BoundaryConditions::Type::Pressure)
+      if (constrained_variable == BoundaryConditions::ConstrainedVariable::Pressure)
       {
         return element.first_global_dof + (side == TreeBoundarySide::Inlet ? 0 : 1);
       }
 
-      if (boundary_type == BoundaryConditions::Type::Flow)
+      if (constrained_variable == BoundaryConditions::ConstrainedVariable::Flow)
       {
         return element.first_global_dof +
                (side == TreeBoundarySide::Inlet ? 2 : element.num_dofs - 1);
@@ -582,7 +584,7 @@ namespace ReducedLung
         for (std::size_t i = 0; i < data.size(); ++i)
         {
           const int global_equation_id = data.global_equation_id[i];
-          local_type_by_equation[global_equation_id] = static_cast<int>(model.type);
+          local_type_by_equation[global_equation_id] = static_cast<int>(model.constrained_variable);
           local_node_by_equation[global_equation_id] = data.node_id[i];
           local_element_by_equation[global_equation_id] = data.global_element_id[i];
           local_dof_by_equation[global_equation_id] = data.global_dof_id[i];
@@ -611,16 +613,17 @@ namespace ReducedLung
 
         const int element_index_value = element_index(metadata, element_global_id);
         const auto& element = metadata.elements[static_cast<std::size_t>(element_index_value)];
-        const auto boundary_type = static_cast<BoundaryConditions::Type>(type_it->second);
+        const auto constrained_variable =
+            static_cast<BoundaryConditions::ConstrainedVariable>(type_it->second);
         const TreeBoundarySide side = determine_boundary_side(element, node_it->second);
-        const int expected_dof_id = expected_boundary_dof_id(element, side, boundary_type);
+        const int expected_dof_id = expected_boundary_dof_id(element, side, constrained_variable);
         FOUR_C_ASSERT_ALWAYS(dof_it->second == expected_dof_id,
             "Boundary condition at equation {} constrains global dof {}, but element {} side "
             "expects dof {}.",
             global_equation_id, dof_it->second, element.global_element_id + 1, expected_dof_id);
 
         metadata.boundary_conditions.push_back(TreeBoundaryConditionMetadata{
-            .type = boundary_type,
+            .constrained_variable = constrained_variable,
             .side = side,
             .node_id = node_it->second,
             .element_index = element_index_value,
@@ -677,10 +680,12 @@ namespace ReducedLung
       const ReducedLungTreeMetadataContext& context)
   {
     ReducedLungTreeMetadata metadata;
-    const auto& topology = context.parameters.lung_tree.topology;
-
-    FOUR_C_ASSERT_ALWAYS(topology.num_elements > 0,
-        "Reduced-lung tree metadata requires at least one topology element.");
+    const int num_elements = context.discretization.num_global_elements();
+    FOUR_C_ASSERT_ALWAYS(
+        num_elements > 0, "Reduced-lung tree metadata requires at least one element.");
+    FOUR_C_ASSERT_ALWAYS(context.element_types.size() == static_cast<std::size_t>(num_elements),
+        "Reduced-lung tree metadata received {} element types for {} elements.",
+        context.element_types.size(), num_elements);
 
     const MPI_Comm comm = context.row_map.get_comm();
     const auto local_equation_metadata =
@@ -701,21 +706,19 @@ namespace ReducedLung
         Core::Communication::all_reduce(local_num_state_equations, comm);
     const auto element_owner = Core::Communication::all_reduce(local_element_owner, comm);
 
-    metadata.elements.reserve(static_cast<std::size_t>(topology.num_elements));
-    for (int global_element_id = 0; global_element_id < topology.num_elements; ++global_element_id)
+    metadata.elements.reserve(static_cast<std::size_t>(num_elements));
+    for (int global_element_id = 0; global_element_id < num_elements; ++global_element_id)
     {
-      const auto topology_nodes = topology.element_nodes.at(global_element_id, "element_nodes");
-      FOUR_C_ASSERT_ALWAYS(topology_nodes.size() == 2u,
-          "Topology element_nodes entry {} must have 2 entries, got {}.", global_element_id + 1,
-          topology_nodes.size());
-      FOUR_C_ASSERT_ALWAYS(topology_nodes[0] >= 1 && topology_nodes[1] >= 1,
-          "Topology element_nodes entry {} must use 1-based node ids.", global_element_id + 1);
-      FOUR_C_ASSERT_ALWAYS(
-          topology_nodes[0] <= topology.num_nodes && topology_nodes[1] <= topology.num_nodes,
-          "Topology element_nodes entry {} references node ids outside [1, {}].",
-          global_element_id + 1, topology.num_nodes);
+      const auto* discretization_element = context.discretization.g_element(global_element_id);
+      FOUR_C_ASSERT_ALWAYS(discretization_element != nullptr,
+          "Reduced-lung discretization is missing global element {}.", global_element_id + 1);
+      const auto topology_nodes = discretization_element->node_ids();
+      FOUR_C_ASSERT_ALWAYS(discretization_element->num_node() == 2,
+          "Reduced-lung element {} must have 2 nodes, got {}.", global_element_id + 1,
+          discretization_element->num_node());
       FOUR_C_ASSERT_ALWAYS(topology_nodes[0] != topology_nodes[1],
-          "Topology element_nodes entry {} uses identical in/out node ids.", global_element_id + 1);
+          "Reduced-lung element {} uses identical inlet and outlet node ids.",
+          global_element_id + 1);
 
       const auto first_dof_it = context.first_global_dof_of_ele.find(global_element_id);
       FOUR_C_ASSERT_ALWAYS(first_dof_it != context.first_global_dof_of_ele.end(),
@@ -738,10 +741,9 @@ namespace ReducedLung
       const auto global_dof_ids = consecutive_ids(first_dof_it->second, dof_count_it->second);
       TreeElementMetadata element{
           .global_element_id = global_element_id,
-          .kind = map_element_kind(
-              context.parameters.lung_tree.element_type.at(global_element_id, "element_type")),
-          .inlet_node_id = topology_nodes[0] - 1,
-          .outlet_node_id = topology_nodes[1] - 1,
+          .kind = map_element_kind(context.element_types[global_element_id]),
+          .inlet_node_id = topology_nodes[0],
+          .outlet_node_id = topology_nodes[1],
           .parent_element_index = -1,
           .child_element_indices = {-1, -1},
           .child_count = 0,

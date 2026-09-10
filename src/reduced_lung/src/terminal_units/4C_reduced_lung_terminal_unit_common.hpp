@@ -118,8 +118,8 @@ namespace ReducedLung::TerminalUnits
   /**
    * @brief Callback type for one-time structured tree coefficient pattern assembly.
    *
-   * Static callbacks append pressure-column entries and a q-coefficient placeholder that is
-   * replaced by TreeLinearizationEvaluator during Newton iterations.
+   * Static callbacks append the coefficient pattern and placeholders that are replaced by
+   * TreeLinearizationEvaluator during Newton iterations.
    */
   using StaticTreeLinearizationEvaluator =
       std::function<void(TerminalUnitData& model_data, TreeCoefficientAssemblyTarget& target)>;

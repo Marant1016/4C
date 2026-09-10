@@ -62,8 +62,8 @@ namespace ReducedLung::Airways
   /**
    * @brief Assemble static airway structured tree-linearization row patterns.
    *
-   * Appends the fixed pressure coefficients and dynamic coefficient placeholders consumed by the
-   * direct and generic structured tree assembly paths.
+   * Appends the coefficient row patterns consumed by the direct and generic structured tree
+   * assembly paths.
    */
   void update_static_tree_linearization(
       TreeCoefficientAssemblyTarget& target, AirwayContainer& airways);

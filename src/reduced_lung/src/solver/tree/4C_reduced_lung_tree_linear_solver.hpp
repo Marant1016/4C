@@ -199,7 +199,8 @@ namespace ReducedLung
     bool force_batch_tree_solve_ = false;
     bool error_on_dense_fallback_ = false;
 
-    BoundaryConditions::Type root_boundary_type_ = BoundaryConditions::Type::Pressure;
+    BoundaryConditions::ConstrainedVariable root_boundary_variable_ =
+        BoundaryConditions::ConstrainedVariable::Pressure;
     int root_boundary_row_ = -1;
     int root_boundary_local_dof_ = -1;
     std::vector<int> global_element_id_;

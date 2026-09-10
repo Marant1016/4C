@@ -73,8 +73,7 @@ namespace ReducedLung::TerminalUnits::Rheology
                                    four_element_maxwell_model.viscosity_eta_m[i];
         const double branch_viscosity = four_element_maxwell_model.elasticity_E_m[i] * dt *
                                         four_element_maxwell_model.viscosity_eta_m[i] / denominator;
-        coefficients.flow_coeff[i] =
-            four_element_maxwell_model.viscosity_eta[i] + branch_viscosity;
+        coefficients.flow_coeff[i] = four_element_maxwell_model.viscosity_eta[i] + branch_viscosity;
         coefficients.history_coeff[i] = four_element_maxwell_model.viscosity_eta_m[i] / denominator;
       }
       coefficients.dt = dt;
@@ -418,7 +417,7 @@ namespace ReducedLung::TerminalUnits::Rheology
         const Core::LinAlg::Vector<double>& locally_relevant_dofs,
         const Elasticity::ElasticPressurePartialsView& elastic_pressure_partials)
     {
-      /* Static setup inserted pressure entries and a q placeholder; only q changes with state. */
+      /* Static setup inserted the row pattern; recruitment can make every value state-dependent. */
       const size_t element_count = data.number_of_elements();
       const auto& viscosity = kelvin_voigt_model.viscosity_eta;
       std::span<double> grad_q =
@@ -471,7 +470,7 @@ namespace ReducedLung::TerminalUnits::Rheology
     void initialize_tree_linearization(
         TreeCoefficientAssemblyTarget& target, TerminalUnitData& data)
     {
-      /* Append the fixed terminal-unit row pattern once for either generic or direct targets. */
+      /* Append the terminal-unit row pattern once for either generic or direct targets. */
       for (size_t i = 0; i < data.number_of_elements(); ++i)
       {
         target.append_value(data.local_row_id[i], data.lid_p1[i], 1.0);

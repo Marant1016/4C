@@ -89,28 +89,6 @@ namespace
     bifurcations.q_in_child_2_lid[index] = local_dof_ids[BifurcationData::q_in_child_2];
   }
 
-  std::unique_ptr<Core::FE::Discretization> make_airway_discretization(
-      const std::vector<int>& node_ids, const std::vector<std::array<int, 2>>& element_nodes)
-  {
-    auto dis = std::make_unique<Core::FE::Discretization>("junctions_test", MPI_COMM_WORLD, 3);
-
-    for (int node_id : node_ids)
-    {
-      std::array<double, 3> coords{static_cast<double>(node_id), 0.0, 0.0};
-      dis->add_node(coords, node_id, nullptr);
-    }
-
-    for (size_t i = 0; i < element_nodes.size(); ++i)
-    {
-      auto ele = std::make_shared<Discret::Elements::RedAirway>(static_cast<int>(i), 0);
-      ele->set_node_ids(2, element_nodes[i].data());
-      dis->add_element(ele);
-    }
-
-    dis->fill_complete(Core::FE::OptionsFillComplete::none());
-    return dis;
-  }
-
   TEST(JunctionsTests, ConnectionResidualAssembly)
   {
     ConnectionData connections;

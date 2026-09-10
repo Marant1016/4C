@@ -11,6 +11,7 @@
 
 #include "4C_io_input_field.hpp"
 #include "4C_linalg_map.hpp"
+#include "4C_reduced_lung_test_utils_test.hpp"
 #include "4C_utils_exceptions.hpp"
 
 #include <mpi.h>
@@ -31,7 +32,8 @@ namespace
 
   struct TreeMetadataFixture
   {
-    ReducedLungParameters parameters;
+    std::unique_ptr<Core::FE::Discretization> discretization;
+    std::vector<ElementType> element_types;
     std::map<int, int> first_global_dof_of_ele;
     std::map<int, int> global_dof_per_ele;
     Airways::AirwayContainer airways;
@@ -45,7 +47,8 @@ namespace
     [[nodiscard]] ReducedLungTreeMetadata build() const
     {
       return build_reduced_lung_tree_metadata(ReducedLungTreeMetadataContext{
-          .parameters = parameters,
+          .discretization = *discretization,
+          .element_types = element_types,
           .first_global_dof_of_ele = first_global_dof_of_ele,
           .global_dof_per_ele = global_dof_per_ele,
           .airways = airways,
@@ -73,8 +76,7 @@ namespace
       TreeMetadataFixture& fixture, const std::vector<std::array<int, 5>>& entries)
   {
     BoundaryConditions::BoundaryConditionModel model;
-    model.type = BoundaryConditions::Type::Pressure;
-    model.value_source = BoundaryConditions::ValueSource::constant_value;
+    model.constrained_variable = BoundaryConditions::ConstrainedVariable::Pressure;
 
     for (std::size_t i = 0; i < entries.size(); ++i)
     {
@@ -83,10 +85,7 @@ namespace
       const int element_id = entry[1];
       const int global_dof_id = entry[2];
       const int local_equation_id = entry[3];
-      const int input_bc_id = entry[4];
-
-      model.add_condition(
-          node_id, element_id, static_cast<int>(i), global_dof_id, input_bc_id, 0.0);
+      model.add_condition(node_id, element_id, static_cast<int>(i), global_dof_id);
       model.data.local_equation_id.back() = local_equation_id;
       model.data.global_equation_id.back() = local_equation_id;
       model.data.local_dof_id.back() = global_dof_id;
@@ -107,22 +106,8 @@ namespace
   TreeMetadataFixture make_connection_fixture()
   {
     TreeMetadataFixture fixture;
-    fixture.parameters.lung_tree.topology.num_nodes = 3;
-    fixture.parameters.lung_tree.topology.num_elements = 2;
-    fixture.parameters.lung_tree.topology.node_coordinates =
-        Core::IO::InputField<std::vector<double>>(std::unordered_map<int, std::vector<double>>{
-            {1, {0.0, 0.0, 0.0}},
-            {2, {1.0, 0.0, 0.0}},
-            {3, {2.0, 0.0, 0.0}},
-        });
-    fixture.parameters.lung_tree.topology.element_nodes =
-        Core::IO::InputField<std::vector<int>>(std::unordered_map<int, std::vector<int>>{
-            {1, {1, 2}},
-            {2, {2, 3}},
-        });
-    fixture.parameters.lung_tree.element_type =
-        Core::IO::InputField<ElementType>(std::unordered_map<int, ElementType>{
-            {1, ElementType::Airway}, {2, ElementType::TerminalUnit}});
+    fixture.discretization = TestUtils::make_chain_discretization("tree_metadata_connection", 2);
+    fixture.element_types = {ElementType::Airway, ElementType::TerminalUnit};
 
     set_uniform_dof_maps(fixture, 2);
 
@@ -154,24 +139,10 @@ namespace
   TreeMetadataFixture make_bifurcation_fixture()
   {
     TreeMetadataFixture fixture;
-    fixture.parameters.lung_tree.topology.num_nodes = 4;
-    fixture.parameters.lung_tree.topology.num_elements = 3;
-    fixture.parameters.lung_tree.topology.node_coordinates =
-        Core::IO::InputField<std::vector<double>>(std::unordered_map<int, std::vector<double>>{
-            {1, {0.0, 0.0, 0.0}},
-            {2, {1.0, 0.0, 0.0}},
-            {3, {2.0, 1.0, 0.0}},
-            {4, {2.0, -1.0, 0.0}},
-        });
-    fixture.parameters.lung_tree.topology.element_nodes =
-        Core::IO::InputField<std::vector<int>>(std::unordered_map<int, std::vector<int>>{
-            {1, {1, 2}},
-            {2, {2, 3}},
-            {3, {2, 4}},
-        });
-    fixture.parameters.lung_tree.element_type = Core::IO::InputField<ElementType>(
-        std::unordered_map<int, ElementType>{{1, ElementType::Airway},
-            {2, ElementType::TerminalUnit}, {3, ElementType::TerminalUnit}});
+    fixture.discretization =
+        TestUtils::make_bifurcation_discretization("tree_metadata_bifurcation");
+    fixture.element_types = {
+        ElementType::Airway, ElementType::TerminalUnit, ElementType::TerminalUnit};
 
     set_uniform_dof_maps(fixture, 3);
 
@@ -204,16 +175,10 @@ namespace
   TreeMetadataFixture make_cycle_fixture()
   {
     TreeMetadataFixture fixture;
-    fixture.parameters.lung_tree.topology.num_nodes = 4;
-    fixture.parameters.lung_tree.topology.num_elements = 3;
-    fixture.parameters.lung_tree.topology.element_nodes =
-        Core::IO::InputField<std::vector<int>>(std::unordered_map<int, std::vector<int>>{
-            {1, {1, 2}},
-            {2, {3, 4}},
-            {3, {4, 3}},
-        });
-    fixture.parameters.lung_tree.element_type =
-        Core::IO::InputField<ElementType>(ElementType::Airway);
+    fixture.discretization = TestUtils::make_line2_discretization("tree_metadata_cycle",
+        {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, {3.0, 0.0, 0.0}},
+        {{0, 1}, {2, 3}, {3, 2}});
+    fixture.element_types.assign(3, ElementType::Airway);
 
     set_uniform_dof_maps(fixture, 3);
 
@@ -230,17 +195,10 @@ namespace
   TreeMetadataFixture make_unsupported_branch_degree_fixture()
   {
     TreeMetadataFixture fixture;
-    fixture.parameters.lung_tree.topology.num_nodes = 5;
-    fixture.parameters.lung_tree.topology.num_elements = 4;
-    fixture.parameters.lung_tree.topology.element_nodes =
-        Core::IO::InputField<std::vector<int>>(std::unordered_map<int, std::vector<int>>{
-            {1, {1, 2}},
-            {2, {2, 3}},
-            {3, {2, 4}},
-            {4, {2, 5}},
-        });
-    fixture.parameters.lung_tree.element_type =
-        Core::IO::InputField<ElementType>(ElementType::Airway);
+    fixture.discretization = TestUtils::make_line2_discretization("tree_metadata_branch_degree",
+        {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, {2.0, 1.0, 0.0}, {2.0, -1.0, 0.0}},
+        {{0, 1}, {1, 2}, {1, 3}, {1, 4}});
+    fixture.element_types.assign(4, ElementType::Airway);
 
     set_uniform_dof_maps(fixture, 4);
 

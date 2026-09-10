@@ -66,8 +66,8 @@ namespace ReducedLung::TerminalUnits
   /**
    * @brief Assemble static terminal-unit structured tree-linearization row patterns.
    *
-   * Appends the fixed pressure coefficients and dynamic q-coefficient placeholder consumed by the
-   * direct and generic structured tree assembly paths.
+   * Appends p1, p2, and q placeholders consumed by the direct and generic structured tree assembly
+   * paths.
    */
   void update_static_tree_linearization(
       TreeCoefficientAssemblyTarget& target, TerminalUnitContainer& terminal_units);
@@ -75,8 +75,8 @@ namespace ReducedLung::TerminalUnits
   /**
    * @brief Update dynamic terminal-unit structured tree-linearization coefficients.
    *
-   * Replaces only the q coefficient in the row pattern created by
-   * update_static_tree_linearization().
+   * Replaces all three coefficients in the row pattern. Coupled recruitment makes the pressure
+   * coefficients state-dependent as well as the q coefficient.
    */
   void update_tree_linearization(TreeCoefficientAssemblyTarget& target,
       TerminalUnitContainer& terminal_units,

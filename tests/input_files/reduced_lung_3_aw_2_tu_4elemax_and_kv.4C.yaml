@@ -1,6 +1,6 @@
 TITLE:
   - "3 resistive airways forming a bifurcation, 2 attached terminal units."
-  - "Both terminal units have linear elasticity, but they have differnt rheological models:"
+  - "Both terminal units have linear elasticity, but they have different rheological models:"
   - "one is a 4-element maxwell model, the other a Kelvin-Voigt model."
   - "Tests if two different TU models work in parallel."
 PROBLEM TYPE:

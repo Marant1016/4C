@@ -118,7 +118,7 @@ namespace ReducedLung::TerminalUnits::Rheology
    * @brief Build static structured tree-linearization row-pattern evaluator.
    *
    * The callback appends the terminal-unit p1, p2, and q entries once so dynamic assembly can
-   * replace only the q coefficient.
+   * replace their values without changing the row pattern.
    */
   StaticTreeLinearizationEvaluator make_static_tree_linearization_evaluator(
       RheologicalModel& rheological_model);
@@ -126,8 +126,8 @@ namespace ReducedLung::TerminalUnits::Rheology
   /**
    * @brief Build dynamic structured tree-linearization evaluator for the concrete rheology variant.
    *
-   * The callback combines elastic-pressure gradients and rheology terms into reusable scratch
-   * storage before writing q coefficients through TreeCoefficientAssemblyTarget.
+   * The callback combines elastic-pressure partials, recruitment derivatives, and rheology terms
+   * before writing p1, p2, and q coefficients through TreeCoefficientAssemblyTarget.
    */
   TreeLinearizationEvaluator make_tree_linearization_evaluator(RheologicalModel& rheological_model,
       Elasticity::ElasticPressurePartialsEvaluator elastic_pressure_partials_evaluator);

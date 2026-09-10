@@ -22,6 +22,7 @@
 #include "4C_reduced_lung_newton_solver.hpp"
 #include "4C_reduced_lung_solver_profiles.hpp"
 #include "4C_reduced_lung_terminal_unit.hpp"
+#include "4C_reduced_lung_test_utils_test.hpp"
 #include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_reduced_lung_tree_metadata.hpp"
 #include "4C_utils_function_manager.hpp"
@@ -32,6 +33,7 @@
 
 #include <algorithm>
 #include <any>
+#include <array>
 #include <functional>
 #include <map>
 #include <memory>
@@ -46,13 +48,42 @@ namespace
   using namespace FourC::ReducedLung;
 
   using ElementType = ReducedLungParameters::LungTree::ElementType;
-  using BoundaryType = ReducedLungParameters::BoundaryConditions::Type;
   using ResistanceType = ReducedLungParameters::LungTree::Airways::FlowModel::ResistanceType;
   using WallModelType = ReducedLungParameters::LungTree::Airways::WallModelType;
   using RheologyType =
       ReducedLungParameters::LungTree::TerminalUnits::RheologicalModel::RheologicalModelType;
   using ElasticityType =
       ReducedLungParameters::LungTree::TerminalUnits::ElasticityModel::ElasticityModelType;
+
+  struct TestProblem
+  {
+    ReducedLungParameters parameters;
+    std::vector<std::array<double, 3>> node_coordinates;
+    std::vector<std::array<int, 2>> element_nodes;
+    std::vector<ElementType> element_types;
+    std::map<int, std::vector<int>> bc_nodes;
+  };
+
+  void set_pressure_boundaries(
+      TestProblem& problem, const std::vector<int>& outlet_nodes, bool root_flow = false)
+  {
+    using InputBc = ReducedLungParameters::BoundaryConditions;
+    const auto condition = [](int id, int function_id)
+    { return InputBc::FromFunctionDefinition{.id = id, .function_id = function_id}; };
+
+    problem.parameters.boundary_conditions.pressure = {condition(2, 2)};
+    problem.parameters.boundary_conditions.flow.clear();
+    if (root_flow)
+    {
+      problem.parameters.boundary_conditions.flow = {condition(1, 1)};
+    }
+    else
+    {
+      problem.parameters.boundary_conditions.pressure.insert(
+          problem.parameters.boundary_conditions.pressure.begin(), condition(1, 1));
+    }
+    problem.bc_nodes = {{1, {0}}, {2, outlet_nodes}};
+  }
 
   Core::Utils::FunctionManager make_function_manager(
       const std::vector<std::string>& function_definitions)
@@ -149,202 +180,145 @@ namespace
     set_terminal_unit_model(params, RheologyType::KelvinVoigt, ElasticityType::Linear);
   }
 
-  ReducedLungParameters make_single_terminal_unit_parameters(double dt)
+  TestProblem make_single_terminal_unit_parameters(double dt)
   {
-    ReducedLungParameters params{};
+    TestProblem problem;
+    auto& params = problem.parameters;
     set_common_air_properties(params);
     params.dynamics = make_dynamics(dt);
 
-    params.lung_tree.topology.num_nodes = 2;
-    params.lung_tree.topology.num_elements = 1;
-    params.lung_tree.topology.node_coordinates =
-        Core::IO::InputField<std::vector<double>>(std::unordered_map<int, std::vector<double>>{
-            {1, {0.0, 0.0, 0.0}},
-            {2, {1.0, 0.0, 0.0}},
-        });
-    params.lung_tree.topology.element_nodes =
-        Core::IO::InputField<std::vector<int>>(std::unordered_map<int, std::vector<int>>{
-            {1, {1, 2}},
-        });
-    params.lung_tree.element_type = Core::IO::InputField<ElementType>(ElementType::TerminalUnit);
-    params.lung_tree.generation = Core::IO::InputField<int>(-1);
+    problem.node_coordinates = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
+    problem.element_nodes = {{0, 1}};
+    problem.element_types = {ElementType::TerminalUnit};
     set_linear_terminal_unit_model(params);
-
-    params.boundary_conditions.num_conditions = 2;
-    params.boundary_conditions.bc_type = Core::IO::InputField<BoundaryType>(BoundaryType::Pressure);
-    params.boundary_conditions.node_id =
-        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 2}});
-    params.boundary_conditions.value_source =
-        ReducedLungParameters::BoundaryConditions::ValueSource::bc_function_id;
-    params.boundary_conditions.function_id =
-        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 2}});
-
-    return params;
+    set_pressure_boundaries(problem, {1});
+    return problem;
   }
 
-  ReducedLungParameters make_serial_airway_parameters(double dt)
+  TestProblem make_serial_airway_parameters(double dt)
   {
-    ReducedLungParameters params{};
+    TestProblem problem;
+    auto& params = problem.parameters;
     set_common_air_properties(params);
     params.dynamics = make_dynamics(dt);
 
-    params.lung_tree.topology.num_nodes = 4;
-    params.lung_tree.topology.num_elements = 3;
-    params.lung_tree.topology.node_coordinates =
-        Core::IO::InputField<std::vector<double>>(std::unordered_map<int, std::vector<double>>{
-            {1, {0.0, 0.0, 0.0}},
-            {2, {1.0, 0.0, 0.0}},
-            {3, {2.0, 0.0, 0.0}},
-            {4, {3.0, 0.0, 0.0}},
-        });
-    params.lung_tree.topology.element_nodes =
-        Core::IO::InputField<std::vector<int>>(std::unordered_map<int, std::vector<int>>{
-            {1, {1, 2}},
-            {2, {2, 3}},
-            {3, {3, 4}},
-        });
-    params.lung_tree.element_type = Core::IO::InputField<ElementType>(ElementType::Airway);
-    params.lung_tree.generation =
-        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 0}, {2, 1}, {3, 2}});
+    problem.node_coordinates = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {2.0, 0.0, 0.0}, {3.0, 0.0, 0.0}};
+    problem.element_nodes = {{0, 1}, {1, 2}, {2, 3}};
+    problem.element_types.assign(3, ElementType::Airway);
     set_linear_rigid_airway_model(params, {{1, 1.0}, {2, 0.9}, {3, 0.8}});
     set_linear_terminal_unit_model(params);
-
-    params.boundary_conditions.num_conditions = 2;
-    params.boundary_conditions.bc_type = Core::IO::InputField<BoundaryType>(BoundaryType::Pressure);
-    params.boundary_conditions.node_id =
-        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 4}});
-    params.boundary_conditions.value_source =
-        ReducedLungParameters::BoundaryConditions::ValueSource::bc_function_id;
-    params.boundary_conditions.function_id =
-        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 2}});
-
-    return params;
+    set_pressure_boundaries(problem, {3});
+    return problem;
   }
 
-  ReducedLungParameters make_serial_airway_root_flow_parameters(double dt)
+  TestProblem make_serial_airway_root_flow_parameters(double dt)
   {
-    auto params = make_serial_airway_parameters(dt);
-    params.boundary_conditions.bc_type =
-        Core::IO::InputField<BoundaryType>(std::unordered_map<int, BoundaryType>{
-            {1, BoundaryType::Flow}, {2, BoundaryType::Pressure}});
-    return params;
+    auto problem = make_serial_airway_parameters(dt);
+    set_pressure_boundaries(problem, {3}, true);
+    return problem;
   }
 
-  ReducedLungParameters make_bifurcation_parameters(double dt)
+  TestProblem make_bifurcation_parameters(double dt)
   {
-    ReducedLungParameters params{};
+    TestProblem problem;
+    auto& params = problem.parameters;
     set_common_air_properties(params);
     params.dynamics = make_dynamics(dt);
 
-    params.lung_tree.topology.num_nodes = 4;
-    params.lung_tree.topology.num_elements = 3;
-    params.lung_tree.topology.node_coordinates =
-        Core::IO::InputField<std::vector<double>>(std::unordered_map<int, std::vector<double>>{
-            {1, {0.0, 0.0, 0.0}},
-            {2, {1.0, 0.0, 0.0}},
-            {3, {2.0, 1.0, 0.0}},
-            {4, {2.0, -1.0, 0.0}},
-        });
-    params.lung_tree.topology.element_nodes =
-        Core::IO::InputField<std::vector<int>>(std::unordered_map<int, std::vector<int>>{
-            {1, {1, 2}},
-            {2, {2, 3}},
-            {3, {2, 4}},
-        });
-    params.lung_tree.element_type = Core::IO::InputField<ElementType>(ElementType::Airway);
-    params.lung_tree.generation =
-        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 0}, {2, 1}, {3, 1}});
+    problem.node_coordinates = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {2.0, 1.0, 0.0}, {2.0, -1.0, 0.0}};
+    problem.element_nodes = {{0, 1}, {1, 2}, {1, 3}};
+    problem.element_types.assign(3, ElementType::Airway);
     set_linear_rigid_airway_model(params, {{1, 1.0}, {2, 0.85}, {3, 0.7}});
     set_linear_terminal_unit_model(params);
-
-    params.boundary_conditions.num_conditions = 3;
-    params.boundary_conditions.bc_type = Core::IO::InputField<BoundaryType>(BoundaryType::Pressure);
-    params.boundary_conditions.node_id =
-        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 3}, {3, 4}});
-    params.boundary_conditions.value_source =
-        ReducedLungParameters::BoundaryConditions::ValueSource::bc_function_id;
-    params.boundary_conditions.function_id =
-        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 2}, {3, 2}});
-
-    return params;
+    set_pressure_boundaries(problem, {2, 3});
+    return problem;
   }
 
-  ReducedLungParameters make_kelvin_voigt_airway_parameters(double dt)
+  TestProblem make_kelvin_voigt_airway_parameters(double dt)
   {
-    auto params = make_serial_airway_parameters(dt);
-    set_airway_model(
-        params, {{1, 1.0}, {2, 0.9}, {3, 0.8}}, ResistanceType::Linear, WallModelType::KelvinVoigt);
-    return params;
-  }
-
-  ReducedLungParameters make_nonlinear_airway_parameters(double dt)
-  {
-    auto params = make_serial_airway_parameters(dt);
-    set_airway_model(
-        params, {{1, 1.0}, {2, 0.9}, {3, 0.8}}, ResistanceType::NonLinear, WallModelType::Rigid);
-    return params;
-  }
-
-  ReducedLungParameters make_nonlinear_kelvin_voigt_airway_parameters(double dt)
-  {
-    auto params = make_serial_airway_parameters(dt);
-    set_airway_model(params, {{1, 1.0}, {2, 0.9}, {3, 0.8}}, ResistanceType::NonLinear,
+    auto problem = make_serial_airway_parameters(dt);
+    set_airway_model(problem.parameters, {{1, 1.0}, {2, 0.9}, {3, 0.8}}, ResistanceType::Linear,
         WallModelType::KelvinVoigt);
-    return params;
+    return problem;
   }
 
-  ReducedLungParameters make_ogden_terminal_unit_parameters(double dt)
+  TestProblem make_nonlinear_airway_parameters(double dt)
   {
-    auto params = make_single_terminal_unit_parameters(dt);
-    set_terminal_unit_model(params, RheologyType::KelvinVoigt, ElasticityType::Ogden);
-    return params;
+    auto problem = make_serial_airway_parameters(dt);
+    set_airway_model(problem.parameters, {{1, 1.0}, {2, 0.9}, {3, 0.8}}, ResistanceType::NonLinear,
+        WallModelType::Rigid);
+    return problem;
   }
 
-  ReducedLungParameters make_four_element_maxwell_terminal_unit_parameters(double dt)
+  TestProblem make_nonlinear_kelvin_voigt_airway_parameters(double dt)
   {
-    auto params = make_single_terminal_unit_parameters(dt);
-    set_terminal_unit_model(params, RheologyType::FourElementMaxwell, ElasticityType::Linear);
-    return params;
+    auto problem = make_serial_airway_parameters(dt);
+    set_airway_model(problem.parameters, {{1, 1.0}, {2, 0.9}, {3, 0.8}}, ResistanceType::NonLinear,
+        WallModelType::KelvinVoigt);
+    return problem;
   }
 
-  ReducedLungParameters make_four_element_maxwell_ogden_terminal_unit_parameters(double dt)
+  TestProblem make_ogden_terminal_unit_parameters(double dt)
   {
-    auto params = make_single_terminal_unit_parameters(dt);
-    set_terminal_unit_model(params, RheologyType::FourElementMaxwell, ElasticityType::Ogden);
-    return params;
+    auto problem = make_single_terminal_unit_parameters(dt);
+    set_terminal_unit_model(problem.parameters, RheologyType::KelvinVoigt, ElasticityType::Ogden);
+    return problem;
   }
 
-  ReducedLungParameters make_mixed_airway_terminal_unit_parameters(double dt)
+  TestProblem make_four_element_maxwell_terminal_unit_parameters(double dt)
   {
-    ReducedLungParameters params{};
+    auto problem = make_single_terminal_unit_parameters(dt);
+    set_terminal_unit_model(
+        problem.parameters, RheologyType::FourElementMaxwell, ElasticityType::Linear);
+    return problem;
+  }
+
+  TestProblem make_four_element_maxwell_ogden_terminal_unit_parameters(double dt)
+  {
+    auto problem = make_single_terminal_unit_parameters(dt);
+    set_terminal_unit_model(
+        problem.parameters, RheologyType::FourElementMaxwell, ElasticityType::Ogden);
+    return problem;
+  }
+
+  TestProblem make_coupled_recruitment_terminal_unit_parameters(double dt)
+  {
+    auto problem = make_single_terminal_unit_parameters(dt);
+    auto& recruitment = problem.parameters.lung_tree.terminal_units.recruitment_model;
+    using RecruitmentModel = ReducedLungParameters::LungTree::TerminalUnits::RecruitmentModel;
+    recruitment.pressure_law_type = Core::IO::InputField<RecruitmentModel::PressureLawType>(
+        RecruitmentModel::PressureLawType::LinearPressure);
+    recruitment.time_law_type =
+        Core::IO::InputField<RecruitmentModel::TimeLawType>(RecruitmentModel::TimeLawType::None);
+    recruitment.reference_volume_linearization =
+        Core::IO::InputField<RecruitmentModel::ReferenceVolumeLinearization>(
+            RecruitmentModel::ReferenceVolumeLinearization::Coupled);
+    recruitment.linear_pressure.v0_min = Core::IO::InputField<double>(0.4);
+    recruitment.linear_pressure.v0_max = Core::IO::InputField<double>(1.4);
+    recruitment.linear_pressure.p_closing_min = Core::IO::InputField<double>(-0.2);
+    recruitment.linear_pressure.p_opening_min = Core::IO::InputField<double>(0.0);
+    recruitment.linear_pressure.delta_p_minmax = Core::IO::InputField<double>(1.0);
+    recruitment.linear_pressure.epsilon_v0_switch = Core::IO::InputField<double>(0.01);
+    recruitment.linear_pressure.initial_v0 = Core::IO::InputField<double>(0.4);
+    recruitment.linear_pressure.initial_path =
+        Core::IO::InputField<RecruitmentModel::HysteresisPath>(
+            RecruitmentModel::HysteresisPath::Opening);
+    return problem;
+  }
+
+  TestProblem make_mixed_airway_terminal_unit_parameters(double dt)
+  {
+    TestProblem problem;
+    auto& params = problem.parameters;
     set_common_air_properties(params);
     params.dynamics = make_dynamics(dt);
 
-    params.lung_tree.topology.num_nodes = 6;
-    params.lung_tree.topology.num_elements = 5;
-    params.lung_tree.topology.node_coordinates =
-        Core::IO::InputField<std::vector<double>>(std::unordered_map<int, std::vector<double>>{
-            {1, {0.0, 0.0, 0.0}},
-            {2, {1.0, 0.0, 0.0}},
-            {3, {2.0, 1.0, 0.0}},
-            {4, {2.0, -1.0, 0.0}},
-            {5, {3.0, 1.0, 0.0}},
-            {6, {3.0, -1.0, 0.0}},
-        });
-    params.lung_tree.topology.element_nodes =
-        Core::IO::InputField<std::vector<int>>(std::unordered_map<int, std::vector<int>>{
-            {1, {1, 2}},
-            {2, {2, 3}},
-            {3, {2, 4}},
-            {4, {3, 5}},
-            {5, {4, 6}},
-        });
-    params.lung_tree.element_type =
-        Core::IO::InputField<ElementType>(std::unordered_map<int, ElementType>{
-            {1, ElementType::Airway}, {2, ElementType::Airway}, {3, ElementType::Airway},
-            {4, ElementType::TerminalUnit}, {5, ElementType::TerminalUnit}});
-    params.lung_tree.generation = Core::IO::InputField<int>(
-        std::unordered_map<int, int>{{1, 0}, {2, 1}, {3, 1}, {4, -1}, {5, -1}});
+    problem.node_coordinates = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {2.0, 1.0, 0.0}, {2.0, -1.0, 0.0},
+        {3.0, 1.0, 0.0}, {3.0, -1.0, 0.0}};
+    problem.element_nodes = {{0, 1}, {1, 2}, {1, 3}, {2, 4}, {3, 5}};
+    problem.element_types = {ElementType::Airway, ElementType::Airway, ElementType::Airway,
+        ElementType::TerminalUnit, ElementType::TerminalUnit};
 
     params.lung_tree.airways.radius = Core::IO::InputField<double>(
         std::unordered_map<int, double>{{1, 1.0}, {2, 0.85}, {3, 0.7}});
@@ -384,16 +358,8 @@ namespace
     params.lung_tree.terminal_units.elasticity_model.linear.elasticity_e =
         Core::IO::InputField<double>(1.0);
 
-    params.boundary_conditions.num_conditions = 3;
-    params.boundary_conditions.bc_type = Core::IO::InputField<BoundaryType>(BoundaryType::Pressure);
-    params.boundary_conditions.node_id =
-        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 5}, {3, 6}});
-    params.boundary_conditions.value_source =
-        ReducedLungParameters::BoundaryConditions::ValueSource::bc_function_id;
-    params.boundary_conditions.function_id =
-        Core::IO::InputField<int>(std::unordered_map<int, int>{{1, 1}, {2, 2}, {3, 2}});
-
-    return params;
+    set_pressure_boundaries(problem, {4, 5});
+    return problem;
   }
 
   struct GeneratedTreeTopology
@@ -453,67 +419,62 @@ namespace
     return topology;
   }
 
-  void set_pressure_boundaries_for_test_tree(
-      ReducedLungParameters& params, const std::vector<int>& leaf_nodes)
+  void set_generated_tree_geometry(TestProblem& problem, const GeneratedTreeTopology& topology)
   {
-    std::unordered_map<int, int> boundary_nodes{{1, 1}};
-    std::unordered_map<int, int> function_ids{{1, 1}};
-    int condition = 2;
-    for (const int leaf_node : leaf_nodes)
+    problem.node_coordinates.reserve(static_cast<std::size_t>(topology.num_nodes));
+    for (int node_id = 1; node_id <= topology.num_nodes; ++node_id)
     {
-      boundary_nodes[condition] = leaf_node;
-      function_ids[condition] = 2;
-      ++condition;
+      const auto& coordinates = topology.coordinates.at(node_id);
+      problem.node_coordinates.push_back({coordinates[0], coordinates[1], coordinates[2]});
     }
 
-    params.boundary_conditions.num_conditions = static_cast<int>(boundary_nodes.size());
-    params.boundary_conditions.bc_type = Core::IO::InputField<BoundaryType>(BoundaryType::Pressure);
-    params.boundary_conditions.node_id = Core::IO::InputField<int>(boundary_nodes);
-    params.boundary_conditions.value_source =
-        ReducedLungParameters::BoundaryConditions::ValueSource::bc_function_id;
-    params.boundary_conditions.function_id = Core::IO::InputField<int>(function_ids);
+    problem.element_nodes.reserve(static_cast<std::size_t>(topology.num_elements));
+    for (int element_id = 1; element_id <= topology.num_elements; ++element_id)
+    {
+      const auto& nodes = topology.element_nodes.at(element_id);
+      problem.element_nodes.push_back({nodes[0] - 1, nodes[1] - 1});
+    }
   }
 
-  ReducedLungParameters make_large_asymmetric_airway_parameters(
-      double dt, WallModelType wall_model_type)
+  void set_pressure_boundaries_for_test_tree(
+      TestProblem& problem, const std::vector<int>& leaf_nodes)
+  {
+    std::vector<int> outlet_nodes;
+    outlet_nodes.reserve(leaf_nodes.size());
+    for (const int node_id : leaf_nodes) outlet_nodes.push_back(node_id - 1);
+    set_pressure_boundaries(problem, outlet_nodes);
+  }
+
+  TestProblem make_large_asymmetric_airway_parameters(double dt, WallModelType wall_model_type)
   {
     constexpr int leaf_count = 13;
     const auto topology = make_asymmetric_test_tree_topology(leaf_count);
 
-    ReducedLungParameters params{};
+    TestProblem problem;
+    auto& params = problem.parameters;
     set_common_air_properties(params);
     params.dynamics = make_dynamics(dt);
-    params.lung_tree.topology.num_nodes = topology.num_nodes;
-    params.lung_tree.topology.num_elements = topology.num_elements;
-    params.lung_tree.topology.node_coordinates =
-        Core::IO::InputField<std::vector<double>>(topology.coordinates);
-    params.lung_tree.topology.element_nodes =
-        Core::IO::InputField<std::vector<int>>(topology.element_nodes);
-    params.lung_tree.element_type = Core::IO::InputField<ElementType>(ElementType::Airway);
-    params.lung_tree.generation = Core::IO::InputField<int>(topology.generation);
+    set_generated_tree_geometry(problem, topology);
+    problem.element_types.assign(
+        static_cast<std::size_t>(topology.num_elements), ElementType::Airway);
     set_airway_model(params, topology.radii, ResistanceType::Linear, wall_model_type);
     set_linear_terminal_unit_model(params);
-    set_pressure_boundaries_for_test_tree(params, topology.leaf_nodes);
-    return params;
+    set_pressure_boundaries_for_test_tree(problem, topology.leaf_nodes);
+    return problem;
   }
 
-  ReducedLungParameters make_large_mixed_airway_terminal_unit_parameters(double dt)
+  TestProblem make_large_mixed_airway_terminal_unit_parameters(double dt)
   {
     constexpr int leaf_count = 13;
     const auto topology = make_asymmetric_test_tree_topology(leaf_count);
 
-    ReducedLungParameters params{};
+    TestProblem problem;
+    auto& params = problem.parameters;
     set_common_air_properties(params);
     params.dynamics = make_dynamics(dt);
-    params.lung_tree.topology.num_nodes = topology.num_nodes;
-    params.lung_tree.topology.num_elements = topology.num_elements;
-    params.lung_tree.topology.node_coordinates =
-        Core::IO::InputField<std::vector<double>>(topology.coordinates);
-    params.lung_tree.topology.element_nodes =
-        Core::IO::InputField<std::vector<int>>(topology.element_nodes);
+    set_generated_tree_geometry(problem, topology);
+    problem.element_types.resize(static_cast<std::size_t>(topology.num_elements));
 
-    std::unordered_map<int, ElementType> element_types;
-    std::unordered_map<int, int> generation;
     std::unordered_map<int, double> airway_radii;
     std::unordered_map<int, WallModelType> wall_models;
     for (const auto& [element, nodes] : topology.element_nodes)
@@ -523,20 +484,16 @@ namespace
                                element) != topology.leaf_elements.end();
       if (is_leaf)
       {
-        element_types[element] = ElementType::TerminalUnit;
-        generation[element] = -1;
+        problem.element_types[static_cast<std::size_t>(element - 1)] = ElementType::TerminalUnit;
       }
       else
       {
-        element_types[element] = ElementType::Airway;
-        generation[element] = topology.generation.at(element);
+        problem.element_types[static_cast<std::size_t>(element - 1)] = ElementType::Airway;
         airway_radii[element] = topology.radii.at(element);
         wall_models[element] = element % 3 == 0 ? WallModelType::KelvinVoigt : WallModelType::Rigid;
       }
     }
 
-    params.lung_tree.element_type = Core::IO::InputField<ElementType>(element_types);
-    params.lung_tree.generation = Core::IO::InputField<int>(generation);
     params.lung_tree.airways.radius = Core::IO::InputField<double>(airway_radii);
     params.lung_tree.airways.flow_model.resistance_type =
         Core::IO::InputField<ResistanceType>(ResistanceType::Linear);
@@ -553,13 +510,17 @@ namespace
     params.lung_tree.airways.wall_model.kelvin_voigt.viscosity.viscous_phase_shift =
         Core::IO::InputField<double>(0.1);
     set_linear_terminal_unit_model(params);
-    set_pressure_boundaries_for_test_tree(params, topology.leaf_nodes);
-    return params;
+    set_pressure_boundaries_for_test_tree(problem, topology.leaf_nodes);
+    return problem;
   }
 
   struct LinearSolverFixture
   {
     ReducedLungParameters params;
+    std::vector<std::array<double, 3>> node_coordinates;
+    std::vector<std::array<int, 2>> element_nodes;
+    std::vector<ElementType> element_types;
+    std::map<int, std::vector<int>> bc_nodes;
     Core::Utils::FunctionManager function_manager;
     Core::FE::Discretization discretization;
     Airways::AirwayContainer airways;
@@ -585,9 +546,13 @@ namespace
     Teuchos::ParameterList solver_params;
     std::function<const Teuchos::ParameterList&(int)> solver_params_callback;
 
-    LinearSolverFixture(const std::string& name, const ReducedLungParameters& input_params,
+    LinearSolverFixture(const std::string& name, const TestProblem& problem,
         const std::vector<std::string>& function_definitions)
-        : params(input_params),
+        : params(problem.parameters),
+          node_coordinates(problem.node_coordinates),
+          element_nodes(problem.element_nodes),
+          element_types(problem.element_types),
+          bc_nodes(problem.bc_nodes),
           function_manager(make_function_manager(function_definitions)),
           discretization(name, MPI_COMM_WORLD, 3)
     {
@@ -597,12 +562,12 @@ namespace
     void initialize()
     {
       Core::Rebalance::RebalanceParameters rebalance_parameters;
-      build_discretization_from_topology(
-          discretization, params.lung_tree.topology, rebalance_parameters);
+      build_discretization_from_nodes_and_elements(
+          discretization, node_coordinates, element_nodes, rebalance_parameters);
       discretization.fill_complete();
 
-      create_local_element_models(discretization, params, airways, terminal_units, dof_per_ele,
-          n_airways, n_terminal_units);
+      create_local_element_models(discretization, params, element_types, airways, terminal_units,
+          dof_per_ele, n_airways, n_terminal_units);
       create_global_dof_maps(
           dof_per_ele, MPI_COMM_WORLD, global_dof_per_ele, first_global_dof_of_ele);
       assign_global_dof_ids_to_models(first_global_dof_of_ele, airways, terminal_units);
@@ -610,7 +575,7 @@ namespace
       Airways::create_evaluators(airways);
 
       global_ele_ids_per_node = create_global_ele_ids_per_node(discretization, MPI_COMM_WORLD);
-      BoundaryConditions::create_boundary_conditions(discretization, params,
+      BoundaryConditions::create_boundary_conditions(discretization, params, bc_nodes,
           global_ele_ids_per_node, global_dof_per_ele, first_global_dof_of_ele, function_manager,
           boundary_conditions);
       BoundaryConditions::create_evaluators(boundary_conditions);
@@ -716,7 +681,8 @@ namespace
     ReducedLungTreeMetadata build_tree_metadata() const
     {
       return build_reduced_lung_tree_metadata(ReducedLungTreeMetadataContext{
-          .parameters = params,
+          .discretization = discretization,
+          .element_types = element_types,
           .first_global_dof_of_ele = first_global_dof_of_ele,
           .global_dof_per_ele = global_dof_per_ele,
           .airways = airways,
@@ -863,9 +829,10 @@ namespace
   }
 
   void compare_tree_and_sparse_corrections(
-      const std::string& name, const ReducedLungParameters& params, bool seed_nonzero_state = false)
+      const std::string& name, const TestProblem& problem, bool seed_nonzero_state = false)
   {
-    LinearSolverFixture fixture(name, params, {"1.0 * t", "0.0"});
+    const auto& params = problem.parameters;
+    LinearSolverFixture fixture(name, problem, {"1.0 * t", "0.0"});
     const double current_time = params.dynamics.time_increment;
 
     if (seed_nonzero_state)
@@ -918,9 +885,10 @@ namespace
   }
 
   void compare_reused_structured_tree_solver_corrections(
-      const std::string& name, const ReducedLungParameters& params)
+      const std::string& name, const TestProblem& problem)
   {
-    LinearSolverFixture fixture(name, params, {"0.25 + 0.5 * t", "0.0"});
+    const auto& params = problem.parameters;
+    LinearSolverFixture fixture(name, problem, {"0.25 + 0.5 * t", "0.0"});
     const auto tree_metadata = fixture.build_tree_metadata();
     TreeNewtonLinearSolver tree_solver(TreeNewtonLinearSolverContext{.tree_metadata = tree_metadata,
         .pivot_tolerance = 1.0e-12,
@@ -957,16 +925,30 @@ namespace
     }
   }
 
-  void compare_direct_and_generic_structured_coefficients(
-      const std::string& name, const ReducedLungParameters& params, bool seed_nonzero_state)
+  void compare_direct_and_generic_structured_coefficients(const std::string& name,
+      const TestProblem& problem, bool seed_nonzero_state,
+      bool expect_recruitment_derivative = false)
   {
-    LinearSolverFixture fixture(name, params, {"1.0 * t", "0.0"});
+    const auto& params = problem.parameters;
+    LinearSolverFixture fixture(name, problem, {"1.0 * t", "0.0"});
     const double current_time = params.dynamics.time_increment;
     if (seed_nonzero_state)
     {
       seed_nonzero_initial_state(fixture);
     }
     fixture.sync_state_from_x();
+    if (expect_recruitment_derivative)
+    {
+      bool found_nonzero_derivative = false;
+      for (const auto& model : fixture.terminal_units.models)
+      {
+        for (const auto& context : model.data.reference_volume_context)
+        {
+          found_nonzero_derivative = found_nonzero_derivative || context.dv0_dp != 0.0;
+        }
+      }
+      EXPECT_TRUE(found_nonzero_derivative);
+    }
     auto residual = fixture.assemble_residual(current_time);
     fixture.assemble_jacobian(current_time);
 
@@ -1025,9 +1007,10 @@ namespace
   }
 
   void compare_forced_batch_structured_tree_and_sparse_corrections(
-      const std::string& name, const ReducedLungParameters& params, bool seed_nonzero_state)
+      const std::string& name, const TestProblem& problem, bool seed_nonzero_state)
   {
-    LinearSolverFixture fixture(name, params, {"1.0 * t", "0.0"});
+    const auto& params = problem.parameters;
+    LinearSolverFixture fixture(name, problem, {"1.0 * t", "0.0"});
     const double current_time = params.dynamics.time_increment;
 
     if (seed_nonzero_state)
@@ -1068,9 +1051,10 @@ namespace
   }
 
   void compare_reused_forced_batch_structured_tree_solver_corrections(
-      const std::string& name, const ReducedLungParameters& params)
+      const std::string& name, const TestProblem& problem)
   {
-    LinearSolverFixture fixture(name, params, {"0.25 + 0.5 * t", "0.0"});
+    const auto& params = problem.parameters;
+    LinearSolverFixture fixture(name, problem, {"0.25 + 0.5 * t", "0.0"});
     const auto tree_metadata = fixture.build_tree_metadata();
     TreeNewtonLinearSolverProfile profile;
     TreeNewtonLinearSolver tree_solver(TreeNewtonLinearSolverContext{.tree_metadata = tree_metadata,
@@ -1163,12 +1147,13 @@ namespace
     }
   }
 
-  void compare_all_solver_workflows(const std::string& name, ReducedLungParameters params,
+  void compare_all_solver_workflows(const std::string& name, TestProblem problem,
       const std::vector<std::string>& function_definitions, ComparisonChecks checks)
   {
-    LinearSolverFixture nox_fixture(name + "_nox", params, function_definitions);
-    LinearSolverFixture sparse_fixture(name + "_sparse", params, function_definitions);
-    LinearSolverFixture tree_fixture(name + "_tree", params, function_definitions);
+    const auto& params = problem.parameters;
+    LinearSolverFixture nox_fixture(name + "_nox", problem, function_definitions);
+    LinearSolverFixture sparse_fixture(name + "_sparse", problem, function_definitions);
+    LinearSolverFixture tree_fixture(name + "_tree", problem, function_definitions);
 
     auto nox_solver = nox_fixture.create_nox_solver();
     auto sparse_solver = sparse_fixture.create_sparse_newton_solver();
@@ -1341,6 +1326,14 @@ namespace
   }
 
   TEST(ReducedLungTreeLinearSolverTests,
+      DirectStructuredAssemblyCoupledRecruitmentMatchesSparseSolver)
+  {
+    compare_direct_and_generic_structured_coefficients(
+        "tree_linear_direct_structured_coupled_recruitment",
+        make_coupled_recruitment_terminal_unit_parameters(0.1), true, true);
+  }
+
+  TEST(ReducedLungTreeLinearSolverTests,
       DirectStructuredAssemblyFourElementMaxwellOgdenTerminalUnitMatchesGenericPath)
   {
     compare_direct_and_generic_structured_coefficients(
@@ -1371,41 +1364,41 @@ namespace
 
   TEST(ReducedLungTreeWorkflowTests, SingleTerminalUnitMatchesNoxAndNewtonSparse)
   {
-    auto params = make_single_terminal_unit_parameters(0.25);
-    params.dynamics.number_of_steps = 3;
-    compare_all_solver_workflows(
-        "tree_workflow_single_terminal", params, {"0.5*t", "0.0"}, {.terminal_unit_volumes = true});
+    auto problem = make_single_terminal_unit_parameters(0.25);
+    problem.parameters.dynamics.number_of_steps = 3;
+    compare_all_solver_workflows("tree_workflow_single_terminal", problem, {"0.5*t", "0.0"},
+        {.terminal_unit_volumes = true});
   }
 
   TEST(ReducedLungTreeWorkflowTests, SerialRigidAirwaysMatchNoxAndNewtonSparse)
   {
-    auto params = make_serial_airway_parameters(0.5);
-    params.dynamics.number_of_steps = 3;
+    auto problem = make_serial_airway_parameters(0.5);
+    problem.parameters.dynamics.number_of_steps = 3;
     compare_all_solver_workflows(
-        "tree_workflow_serial_airways", params, {"t", "0.0"}, {.connection_flow_balance = true});
+        "tree_workflow_serial_airways", problem, {"t", "0.0"}, {.connection_flow_balance = true});
   }
 
   TEST(ReducedLungTreeWorkflowTests, RootInletFlowBoundaryMatchesNoxAndNewtonSparse)
   {
-    auto params = make_serial_airway_root_flow_parameters(0.5);
-    params.dynamics.number_of_steps = 3;
-    compare_all_solver_workflows("tree_workflow_root_inlet_flow", params, {"0.25 + 0.1*t", "0.0"},
+    auto problem = make_serial_airway_root_flow_parameters(0.5);
+    problem.parameters.dynamics.number_of_steps = 3;
+    compare_all_solver_workflows("tree_workflow_root_inlet_flow", problem, {"0.25 + 0.1*t", "0.0"},
         {.connection_flow_balance = true});
   }
 
   TEST(ReducedLungTreeWorkflowTests, BifurcationRigidAirwaysMatchNoxAndNewtonSparse)
   {
-    auto params = make_bifurcation_parameters(0.5);
-    params.dynamics.number_of_steps = 3;
-    compare_all_solver_workflows("tree_workflow_bifurcation_airways", params, {"t", "0.0"},
+    auto problem = make_bifurcation_parameters(0.5);
+    problem.parameters.dynamics.number_of_steps = 3;
+    compare_all_solver_workflows("tree_workflow_bifurcation_airways", problem, {"t", "0.0"},
         {.bifurcation_flow_balance = true});
   }
 
   TEST(ReducedLungTreeWorkflowTests, MixedAirwaysAndTerminalUnitsMatchNoxAndNewtonSparse)
   {
-    auto params = make_mixed_airway_terminal_unit_parameters(0.25);
-    params.dynamics.number_of_steps = 2;
-    compare_all_solver_workflows("tree_workflow_mixed_airways_terminal_units", params,
+    auto problem = make_mixed_airway_terminal_unit_parameters(0.25);
+    problem.parameters.dynamics.number_of_steps = 2;
+    compare_all_solver_workflows("tree_workflow_mixed_airways_terminal_units", problem,
         {"0.5*t", "0.0"}, {.terminal_unit_volumes = true, .bifurcation_flow_balance = true});
   }
 }  // namespace
