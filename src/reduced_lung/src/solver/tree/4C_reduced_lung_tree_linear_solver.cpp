@@ -16,6 +16,7 @@
 #include "4C_utils_exceptions.hpp"
 
 #include <mpi.h>
+#include <Teuchos_TimeMonitor.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1722,6 +1723,7 @@ namespace ReducedLung
       const Core::LinAlg::Vector<double>& residual, const Core::LinAlg::Vector<double>& x,
       const NewtonLinearSystemMetadata& metadata, Core::LinAlg::Vector<double>& delta)
   {
+    TEUCHOS_FUNC_TIME_MONITOR("ReducedLung::NewtonTree:  2)   Solve");
     (void)x;
     (void)metadata;
     const auto solve_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
@@ -2963,157 +2965,161 @@ namespace ReducedLung
         }
       };
 
-      const auto bottom_up_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
-      // Bottom-up pass: assemble each element block after child relations are known, then condense
-      // it to the affine inlet relation consumed by its parent.
-      if (use_scalar_tree_solve_)
       {
+        const auto bottom_up_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
+        // Bottom-up pass: assemble each element block after child relations are known, then
+        // condense it to the affine inlet relation consumed by its parent.
+        if (use_scalar_tree_solve_)
+        {
+          if (profile_ != nullptr)
+          {
+            ++profile_->scalar_group_count;
+          }
+          for (const auto& layer : tree_metadata_.bottom_up_layers)
+          {
+            for (const int element_index : layer)
+            {
+              assemble_scalar_element(element_index);
+              solve_scalar_element(element_index);
+              write_subtree_relation(element_index);
+            }
+          }
+        }
+        else
+        {
+          for (const auto& layer_groups : bottom_up_layer_groups_)
+          {
+            for (const auto& group : layer_groups)
+            {
+              if (group.block_size == 2 && group.child_count == 0)
+              {
+                assemble_2x2_leaf_group(group);
+              }
+              else if (group.block_size == 2 && group.child_count == 1)
+              {
+                assemble_2x2_one_child_group(group);
+              }
+              else if (group.block_size == 2 && group.child_count == 2)
+              {
+                assemble_2x2_two_child_group(group);
+              }
+              else if (group.block_size == 3 && group.child_count == 0)
+              {
+                assemble_3x3_leaf_group(group);
+              }
+              else if (group.block_size == 3 && group.child_count == 1)
+              {
+                assemble_3x3_one_child_group(group);
+              }
+              else if (group.block_size == 3 && group.child_count == 2)
+              {
+                assemble_3x3_two_child_group(group);
+              }
+              else
+              {
+                if (profile_ != nullptr)
+                {
+                  ++profile_->scalar_group_count;
+                }
+                assemble_group(group);
+              }
+
+              if (group.block_size == 2)
+              {
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+                const bool assembled_2x2_direct_soa =
+                    coefficient_source_ ==
+                    TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks;
+#else
+                const bool assembled_2x2_direct_soa = false;
+#endif
+                if (!assembled_2x2_direct_soa)
+                {
+                  pack_2x2_group_from_workspace(group);
+                }
+                const auto dense_solve_start =
+                    profile_ != nullptr ? Clock::now() : Clock::time_point{};
+                solve_2x2_batch(group.begin, group.end, grouped_element_indices_, batch_2x2_a00_,
+                    batch_2x2_a01_, batch_2x2_a10_, batch_2x2_a11_, batch_2x2_rhs_constant0_,
+                    batch_2x2_rhs_constant1_, batch_2x2_rhs_inlet_pressure0_,
+                    batch_2x2_rhs_inlet_pressure1_, batch_2x2_intercept0_, batch_2x2_intercept1_,
+                    batch_2x2_slope0_, batch_2x2_slope1_, batch_2x2_fallback_lanes_, profile_,
+                    pivot_tolerance_, error_on_dense_fallback_, element_context_);
+                write_2x2_batch_solution_to_workspace(group);
+                if (profile_ != nullptr)
+                {
+                  profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
+                  profile_->dense_solve_count +=
+                      static_cast<std::uint64_t>(group.end - group.begin);
+                }
+              }
+              else if (group.block_size == 3)
+              {
+#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
+                const bool assembled_3x3_direct_soa =
+                    coefficient_source_ ==
+                        TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks &&
+                    group.child_count >= 0 && group.child_count <= 2;
+#else
+                const bool assembled_3x3_direct_soa = false;
+#endif
+                if (!assembled_3x3_direct_soa)
+                {
+                  pack_3x3_group_from_workspace(group);
+                }
+                const auto dense_solve_start =
+                    profile_ != nullptr ? Clock::now() : Clock::time_point{};
+                solve_3x3_batch(group.begin, group.end, grouped_element_indices_, batch_3x3_a00_,
+                    batch_3x3_a01_, batch_3x3_a02_, batch_3x3_a10_, batch_3x3_a11_, batch_3x3_a12_,
+                    batch_3x3_a20_, batch_3x3_a21_, batch_3x3_a22_, batch_3x3_rhs_constant0_,
+                    batch_3x3_rhs_constant1_, batch_3x3_rhs_constant2_,
+                    batch_3x3_rhs_inlet_pressure0_, batch_3x3_rhs_inlet_pressure1_,
+                    batch_3x3_rhs_inlet_pressure2_, batch_3x3_intercept0_, batch_3x3_intercept1_,
+                    batch_3x3_intercept2_, batch_3x3_slope0_, batch_3x3_slope1_, batch_3x3_slope2_,
+                    batch_3x3_fallback_lanes_, profile_, pivot_tolerance_, error_on_dense_fallback_,
+                    element_context_);
+                write_3x3_batch_solution_to_workspace(group);
+                if (profile_ != nullptr)
+                {
+                  profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
+                  profile_->dense_solve_count +=
+                      static_cast<std::uint64_t>(group.end - group.begin);
+                }
+              }
+              else
+              {
+                if (profile_ != nullptr)
+                {
+                  ++profile_->scalar_group_count;
+                  profile_->unsupported_block_fallback_count +=
+                      static_cast<std::uint64_t>(group.end - group.begin);
+                }
+                for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+                {
+                  solve_scalar_element(
+                      grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
+                }
+              }
+
+              if (group.block_size == 2)
+              {
+                write_2x2_subtree_relation_group(group);
+              }
+              else if (group.block_size == 3)
+              {
+                write_3x3_subtree_relation_group(group);
+              }
+              else
+              {
+                write_subtree_relation_group(group);
+              }
+            }
+          }
+        }
         if (profile_ != nullptr)
         {
-          ++profile_->scalar_group_count;
+          profile_->bottom_up_time += elapsed_seconds(bottom_up_start);
         }
-        for (const auto& layer : tree_metadata_.bottom_up_layers)
-        {
-          for (const int element_index : layer)
-          {
-            assemble_scalar_element(element_index);
-            solve_scalar_element(element_index);
-            write_subtree_relation(element_index);
-          }
-        }
-      }
-      else
-      {
-        for (const auto& layer_groups : bottom_up_layer_groups_)
-        {
-          for (const auto& group : layer_groups)
-          {
-            if (group.block_size == 2 && group.child_count == 0)
-            {
-              assemble_2x2_leaf_group(group);
-            }
-            else if (group.block_size == 2 && group.child_count == 1)
-            {
-              assemble_2x2_one_child_group(group);
-            }
-            else if (group.block_size == 2 && group.child_count == 2)
-            {
-              assemble_2x2_two_child_group(group);
-            }
-            else if (group.block_size == 3 && group.child_count == 0)
-            {
-              assemble_3x3_leaf_group(group);
-            }
-            else if (group.block_size == 3 && group.child_count == 1)
-            {
-              assemble_3x3_one_child_group(group);
-            }
-            else if (group.block_size == 3 && group.child_count == 2)
-            {
-              assemble_3x3_two_child_group(group);
-            }
-            else
-            {
-              if (profile_ != nullptr)
-              {
-                ++profile_->scalar_group_count;
-              }
-              assemble_group(group);
-            }
-
-            if (group.block_size == 2)
-            {
-#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
-              const bool assembled_2x2_direct_soa =
-                  coefficient_source_ ==
-                  TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks;
-#else
-              const bool assembled_2x2_direct_soa = false;
-#endif
-              if (!assembled_2x2_direct_soa)
-              {
-                pack_2x2_group_from_workspace(group);
-              }
-              const auto dense_solve_start =
-                  profile_ != nullptr ? Clock::now() : Clock::time_point{};
-              solve_2x2_batch(group.begin, group.end, grouped_element_indices_, batch_2x2_a00_,
-                  batch_2x2_a01_, batch_2x2_a10_, batch_2x2_a11_, batch_2x2_rhs_constant0_,
-                  batch_2x2_rhs_constant1_, batch_2x2_rhs_inlet_pressure0_,
-                  batch_2x2_rhs_inlet_pressure1_, batch_2x2_intercept0_, batch_2x2_intercept1_,
-                  batch_2x2_slope0_, batch_2x2_slope1_, batch_2x2_fallback_lanes_, profile_,
-                  pivot_tolerance_, error_on_dense_fallback_, element_context_);
-              write_2x2_batch_solution_to_workspace(group);
-              if (profile_ != nullptr)
-              {
-                profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
-                profile_->dense_solve_count += static_cast<std::uint64_t>(group.end - group.begin);
-              }
-            }
-            else if (group.block_size == 3)
-            {
-#if FOUR_C_REDUCED_LUNG_HAS_EXPERIMENTAL_SIMD
-              const bool assembled_3x3_direct_soa =
-                  coefficient_source_ ==
-                      TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks &&
-                  group.child_count >= 0 && group.child_count <= 2;
-#else
-              const bool assembled_3x3_direct_soa = false;
-#endif
-              if (!assembled_3x3_direct_soa)
-              {
-                pack_3x3_group_from_workspace(group);
-              }
-              const auto dense_solve_start =
-                  profile_ != nullptr ? Clock::now() : Clock::time_point{};
-              solve_3x3_batch(group.begin, group.end, grouped_element_indices_, batch_3x3_a00_,
-                  batch_3x3_a01_, batch_3x3_a02_, batch_3x3_a10_, batch_3x3_a11_, batch_3x3_a12_,
-                  batch_3x3_a20_, batch_3x3_a21_, batch_3x3_a22_, batch_3x3_rhs_constant0_,
-                  batch_3x3_rhs_constant1_, batch_3x3_rhs_constant2_,
-                  batch_3x3_rhs_inlet_pressure0_, batch_3x3_rhs_inlet_pressure1_,
-                  batch_3x3_rhs_inlet_pressure2_, batch_3x3_intercept0_, batch_3x3_intercept1_,
-                  batch_3x3_intercept2_, batch_3x3_slope0_, batch_3x3_slope1_, batch_3x3_slope2_,
-                  batch_3x3_fallback_lanes_, profile_, pivot_tolerance_, error_on_dense_fallback_,
-                  element_context_);
-              write_3x3_batch_solution_to_workspace(group);
-              if (profile_ != nullptr)
-              {
-                profile_->dense_solve_time += elapsed_seconds(dense_solve_start);
-                profile_->dense_solve_count += static_cast<std::uint64_t>(group.end - group.begin);
-              }
-            }
-            else
-            {
-              if (profile_ != nullptr)
-              {
-                ++profile_->scalar_group_count;
-                profile_->unsupported_block_fallback_count +=
-                    static_cast<std::uint64_t>(group.end - group.begin);
-              }
-              for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
-              {
-                solve_scalar_element(
-                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
-              }
-            }
-
-            if (group.block_size == 2)
-            {
-              write_2x2_subtree_relation_group(group);
-            }
-            else if (group.block_size == 3)
-            {
-              write_3x3_subtree_relation_group(group);
-            }
-            else
-            {
-              write_subtree_relation_group(group);
-            }
-          }
-        }
-      }
-      if (profile_ != nullptr)
-      {
-        profile_->bottom_up_time += elapsed_seconds(bottom_up_start);
       }
 
       if (current_solve_stamp_ == std::numeric_limits<int>::max())
@@ -3135,32 +3141,34 @@ namespace ReducedLung
         inlet_pressure_stamp_[element_index_size] = solve_stamp;
       };
 
-      const double root_boundary_coeff =
-          required_matrix_value(coefficients, root_boundary_coefficient_,
-              root_boundary_coefficient_value_, pivot_tolerance_, "root inlet boundary");
-      const std::size_t root_element_index_size =
-          static_cast<std::size_t>(tree_metadata_.root_element_index);
-      const double root_boundary_rhs = rhs_value(residual, root_boundary_row_);
-      double root_inlet_pressure = 0.0;
-      if (root_boundary_variable_ == BoundaryConditions::ConstrainedVariable::Pressure)
       {
-        root_inlet_pressure = root_boundary_rhs / root_boundary_coeff;
+        const double root_boundary_coeff =
+            required_matrix_value(coefficients, root_boundary_coefficient_,
+                root_boundary_coefficient_value_, pivot_tolerance_, "root inlet boundary");
+        const std::size_t root_element_index_size =
+            static_cast<std::size_t>(tree_metadata_.root_element_index);
+        const double root_boundary_rhs = rhs_value(residual, root_boundary_row_);
+        double root_inlet_pressure = 0.0;
+        if (root_boundary_variable_ == BoundaryConditions::ConstrainedVariable::Pressure)
+        {
+          root_inlet_pressure = root_boundary_rhs / root_boundary_coeff;
+        }
+        else if (root_boundary_variable_ == BoundaryConditions::ConstrainedVariable::Flow)
+        {
+          const double root_subtree_slope = subtree_relation_G_[root_element_index_size];
+          FOUR_C_ASSERT_ALWAYS(std::abs(root_subtree_slope) > pivot_tolerance_,
+              "TreeNewtonLinearSolver root inlet flow boundary cannot determine the root inlet "
+              "pressure because the condensed root flow relation has a near-zero pressure slope.");
+          root_inlet_pressure = (root_boundary_rhs / root_boundary_coeff -
+                                    subtree_relation_h_[root_element_index_size]) /
+                                root_subtree_slope;
+        }
+        else
+        {
+          FOUR_C_THROW("TreeNewtonLinearSolver found an unsupported root inlet boundary type.");
+        }
+        set_inlet_pressure(tree_metadata_.root_element_index, root_inlet_pressure);
       }
-      else if (root_boundary_variable_ == BoundaryConditions::ConstrainedVariable::Flow)
-      {
-        const double root_subtree_slope = subtree_relation_G_[root_element_index_size];
-        FOUR_C_ASSERT_ALWAYS(std::abs(root_subtree_slope) > pivot_tolerance_,
-            "TreeNewtonLinearSolver root inlet flow boundary cannot determine the root inlet "
-            "pressure because the condensed root flow relation has a near-zero pressure slope.");
-        root_inlet_pressure = (root_boundary_rhs / root_boundary_coeff -
-                                  subtree_relation_h_[root_element_index_size]) /
-                              root_subtree_slope;
-      }
-      else
-      {
-        FOUR_C_THROW("TreeNewtonLinearSolver found an unsupported root inlet boundary type.");
-      }
-      set_inlet_pressure(tree_metadata_.root_element_index, root_inlet_pressure);
 
       double* const delta_values = delta.get_values();
       const auto set_delta_local_value = [&](int local_dof_id, double value)
@@ -3787,71 +3795,76 @@ namespace ReducedLung
         }
       };
 
-      const auto top_down_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
-      constexpr int top_down_scalar_group_threshold = 2;
-      if (use_scalar_tree_solve_)
       {
-        if (profile_ != nullptr)
+        const auto top_down_start = profile_ != nullptr ? Clock::now() : Clock::time_point{};
+        constexpr int top_down_scalar_group_threshold = 2;
+        if (use_scalar_tree_solve_)
         {
-          ++profile_->scalar_group_count;
-        }
-        for (const auto& layer : tree_metadata_.top_down_layers)
-        {
-          for (const int element_index : layer)
+          if (profile_ != nullptr)
           {
-            recover_top_down_element(element_index);
+            ++profile_->scalar_group_count;
+          }
+          for (const auto& layer : tree_metadata_.top_down_layers)
+          {
+            for (const int element_index : layer)
+            {
+              recover_top_down_element(element_index);
+            }
           }
         }
-      }
-      else
-      {
-        for (const auto& layer_groups : top_down_layer_groups_)
+        else
         {
-          for (const auto& group : layer_groups)
+          for (const auto& layer_groups : top_down_layer_groups_)
           {
-            const int group_size = group.end - group.begin;
-            FOUR_C_ASSERT_ALWAYS(group_size >= 0,
-                "TreeNewtonLinearSolver top-down group has invalid range [{}, {}).", group.begin,
-                group.end);
-            const bool use_scalar_top_down_group =
-                !force_batch_tree_solve_ && group_size <= top_down_scalar_group_threshold;
-            if (use_scalar_top_down_group)
+            for (const auto& group : layer_groups)
             {
-              if (profile_ != nullptr)
-              {
-                ++profile_->scalar_group_count;
-              }
-              for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
-              {
-                recover_top_down_element(
-                    grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
-              }
-            }
-            else
-            {
-              if (group.block_size == 2 && group.child_count <= 2)
-              {
-                recover_2x2_top_down_group(group);
-              }
-              else if (group.block_size == 3 && group.child_count <= 2)
-              {
-                recover_3x3_top_down_group(group);
-              }
-              else
+              const int group_size = group.end - group.begin;
+              FOUR_C_ASSERT_ALWAYS(group_size >= 0,
+                  "TreeNewtonLinearSolver top-down group has invalid range [{}, {}).", group.begin,
+                  group.end);
+              const bool use_scalar_top_down_group =
+                  !force_batch_tree_solve_ && group_size <= top_down_scalar_group_threshold;
+              if (use_scalar_top_down_group)
               {
                 if (profile_ != nullptr)
                 {
                   ++profile_->scalar_group_count;
                 }
-                recover_top_down_group(group);
+                for (int grouped_index = group.begin; grouped_index < group.end; ++grouped_index)
+                {
+                  recover_top_down_element(
+                      grouped_element_indices_[static_cast<std::size_t>(grouped_index)]);
+                }
+              }
+              else
+              {
+                if (group.block_size == 2 && group.child_count <= 2)
+                {
+                  recover_2x2_top_down_group(group);
+                }
+                else if (group.block_size == 3 && group.child_count <= 2)
+                {
+                  recover_3x3_top_down_group(group);
+                }
+                else
+                {
+                  if (profile_ != nullptr)
+                  {
+                    ++profile_->scalar_group_count;
+                  }
+                  recover_top_down_group(group);
+                }
               }
             }
           }
         }
+        if (profile_ != nullptr)
+        {
+          profile_->top_down_time += elapsed_seconds(top_down_start);
+        }
       }
       if (profile_ != nullptr)
       {
-        profile_->top_down_time += elapsed_seconds(top_down_start);
         profile_->total_solve_time += elapsed_seconds(solve_start);
         ++profile_->solve_count;
       }

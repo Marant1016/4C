@@ -33,6 +33,7 @@
 #include "4C_utils_exceptions.hpp"
 
 #include <Teuchos_StandardParameterEntryValidators.hpp>
+#include <Teuchos_TimeMonitor.hpp>
 
 #include <cstdint>
 #include <cstdlib>
@@ -403,23 +404,27 @@ namespace ReducedLung
               comm_size);
         }
 
-        tree_metadata_ = build_reduced_lung_tree_metadata(ReducedLungTreeMetadataContext{
-            .discretization = *actdis_,
-            .element_types = element_types_,
-            .first_global_dof_of_ele = first_global_dof_of_ele_,
-            .global_dof_per_ele = global_dof_per_ele_,
-            .airways = airways_,
-            .terminal_units = terminal_units_,
-            .connections = connections_,
-            .bifurcations = bifurcations_,
-            .boundary_conditions = boundary_conditions_,
-            .row_map = *row_map_,
-            .locally_relevant_dof_map = *locally_relevant_dof_map_,
-        });
-        newton_linear_solver_ = std::make_shared<TreeNewtonLinearSolver>(
-            TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_,
-                .coefficient_source = TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks,
-                .profile = tree_profile_enabled_ ? &tree_profile_ : nullptr});
+        {
+          TEUCHOS_FUNC_TIME_MONITOR("ReducedLung::NewtonTree:  0)   Setup");
+          tree_metadata_ = build_reduced_lung_tree_metadata(ReducedLungTreeMetadataContext{
+              .discretization = *actdis_,
+              .element_types = element_types_,
+              .first_global_dof_of_ele = first_global_dof_of_ele_,
+              .global_dof_per_ele = global_dof_per_ele_,
+              .airways = airways_,
+              .terminal_units = terminal_units_,
+              .connections = connections_,
+              .bifurcations = bifurcations_,
+              .boundary_conditions = boundary_conditions_,
+              .row_map = *row_map_,
+              .locally_relevant_dof_map = *locally_relevant_dof_map_,
+          });
+          newton_linear_solver_ = std::make_shared<TreeNewtonLinearSolver>(
+              TreeNewtonLinearSolverContext{.tree_metadata = *tree_metadata_,
+                  .coefficient_source =
+                      TreeNewtonLinearSolverCoefficientSource::StructuredTreeBlocks,
+                  .profile = tree_profile_enabled_ ? &tree_profile_ : nullptr});
+        }
         build_newton_solver();
       }
 

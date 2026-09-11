@@ -17,6 +17,8 @@
 #include "4C_reduced_lung_tree_linearization.hpp"
 #include "4C_utils_exceptions.hpp"
 
+#include <Teuchos_TimeMonitor.hpp>
+
 #include <chrono>
 #include <cmath>
 
@@ -327,6 +329,7 @@ namespace ReducedLung
 
   void NewtonSolver::assemble_tree_linearization_for_current_state()
   {
+    TEUCHOS_FUNC_TIME_MONITOR("ReducedLung::NewtonTree:  1)   Assemble coefficients");
     const auto assembly_start = Clock::now();
     if (TreeCoefficientAssemblyTarget* direct_target =
             linear_solver_->direct_tree_coefficient_target())
